@@ -1,4 +1,4 @@
-"""Unit tests for scripts/python/upgrade_sync/table.py.
+"""Unit tests for upgrade_sync/table.py.
 
 Row classification + status-table rendering — extracted from
 ``check-versions.py``. ``resolve_row`` / ``resolve_chart_row`` are

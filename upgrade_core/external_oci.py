@@ -2,8 +2,7 @@
 
 Thin extension of :mod:`external_standard` for charts distributed via
 OCI registries (ghcr.io, Docker Hub OCI, ECR). The 7-step main flow is
-reused via three hook injection points introduced in the shell -> python migration
-(the migration):
+reused via three hook injection points:
 
   - ``fetch_latest_hook`` — replaces Step 2 with a GitHub Releases API
     lookup. Supports both single-chart repos (``GITHUB_TAG_PREFIX="v"``,
@@ -21,7 +20,7 @@ reused via three hook injection points introduced in the shell -> python migrati
     Otherwise = K6 baseline via :func:`_common_helmfile.update_helmfile_pins`.
 
 Migrated from the canonical bash template at
-``scripts/upgrade-sync/templates/external-oci.sh``.
+``templates/external-oci.sh``.
 
 Public entry-point: ``run(config, argv, script_path)``.
 """

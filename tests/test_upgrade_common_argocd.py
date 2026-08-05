@@ -1,4 +1,4 @@
-"""Unit tests for scripts/python/upgrade_core/_common_argocd.py.
+"""Unit tests for upgrade_core/_common_argocd.py.
 
 Covers the ArgoCD-metadata version helpers backing the ``argocd-pin``
 template: the nested ``chart.version`` reader, the quote-preserving

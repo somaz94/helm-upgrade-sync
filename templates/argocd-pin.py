@@ -7,7 +7,7 @@
 # fetch + diff flow and redirects only the version-pin WRITE to the ArgoCD
 # metadata file(s) via upgrade_core.argocd_pin.
 # Real per-chart upgrade.py files are kept in sync via:
-#   scripts/upgrade-sync/sync.py --apply
+#   sync.py --apply
 # Only the body below the third `# ===` marker is propagated; CONFIG is per-chart.
 
 # ============================================================

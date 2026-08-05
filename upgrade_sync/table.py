@@ -13,8 +13,8 @@ Public API:
 
 Constants ``ROW_FMT``, ``HEADER_ROW``, ``EMPTY_SENTINEL`` and friends
 are byte-for-byte parity with the retired bash ``check-versions.sh``
-output — the awk state machine in ``scripts/ci/auto-upgrade.py``'s
-``parse_check_versions_phase()`` keys off this layout.
+output — CI orchestrators that scrape the check-versions phase key off
+this layout.
 
 Stdlib only.
 """

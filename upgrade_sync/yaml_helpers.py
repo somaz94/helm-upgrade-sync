@@ -1,6 +1,6 @@
 """Lightweight YAML scalar readers for the sync orchestrator.
 
-Extracted from ``scripts/upgrade-sync/check-versions.py`` so the
+Extracted from ``check-versions.py`` so the
 parser surface used to seed the status table can be unit-tested and
 shared with sister tools.
 

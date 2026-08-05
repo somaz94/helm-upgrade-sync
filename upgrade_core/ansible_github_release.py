@@ -5,8 +5,7 @@ track their version from a GitHub Releases feed and store the current version
 in a single YAML key (e.g. `node_exporter_version` in `group_vars/all.yml`).
 
 Migrated from the canonical bash template at
-``scripts/upgrade-sync/templates/ansible-github-release.sh`` as part of the
-the shell -> python migration shell -> python migration.
+``templates/ansible-github-release.sh`` during the shell -> python migration.
 
 Public entry-point: ``run(config, argv, script_path)``.
 """
@@ -217,8 +216,8 @@ def _do_rollback(
     )
 
 
-# GitHub Releases helpers come from `_common` (the shell -> python migration / the migration
-# extraction). `_fetch_latest_version` is a thin convenience wrapper.
+# GitHub Releases helpers live in `_common`, shared with the chart-flavored
+# templates. `_fetch_latest_version` is a thin convenience wrapper.
 
 def _fetch_latest_version(github_repo: str, major_pin: str) -> str:
     versions = _fetch_github_ga_versions(github_repo, major_pin)

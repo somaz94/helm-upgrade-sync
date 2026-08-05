@@ -1,4 +1,4 @@
-"""Unit tests for scripts/python/upgrade_core/external_with_image_tag.py.
+"""Unit tests for upgrade_core/external_with_image_tag.py.
 
 The K8 module is now a thin extension of :mod:`external_standard`
 (during the shell -> python migration): the 7-step main flow is reused via

@@ -1,6 +1,6 @@
-"""Unit tests for scripts/python/upgrade_core/local_with_templates.py.
+"""Unit tests for upgrade_core/local_with_templates.py.
 
-K11 (sturdy-beaver) is an **independent** module — it does not extend
+``local_with_templates`` is an **independent** module — it does not extend
 :mod:`external_standard` via hooks because the local chart flow (helm
 pull --untar / git clone → templates/ replace + custom preserve +
 _pod.tpl patch + extra dirs sync) is fundamentally different from the

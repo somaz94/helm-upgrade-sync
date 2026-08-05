@@ -1,11 +1,10 @@
 """External OCI CR-version upgrade runner (external-oci-cr-version template).
 
-Migrated from ``scripts/upgrade-sync/templates/external-oci-cr-version.sh``
-(during the shell -> python migration), then refactored in
-the shell -> python migration (``the migration``) to share CR-version helpers with the local
-sister template (``local_cr_version``) via :mod:`._common_cr`.
+Migrated from ``templates/external-oci-cr-version.sh`` during the
+shell -> python migration, then refactored to share CR-version helpers with
+the local sister template (``local_cr_version``) via :mod:`._common_cr`.
 
-Independent module following the K11 (``local_with_templates``) pattern
+Independent module following the ``local_with_templates`` pattern
 — does **not** extend :mod:`external_standard` via hooks because the
 CR-version flow is structurally different:
 
@@ -35,9 +34,9 @@ production consumers — ``observability/logging/elasticsearch`` and
 ``DEPENDENCY_CR_KIND="elasticsearch"`` so its target version stays
 ``<= elasticsearch.spec.version``.
 
-K13-specific helpers live here. CR-version helpers shared with K12 live
-in :mod:`._common_cr` (extracted the shell -> python migration, 2-datapoint K9
-``_common_helmfile.py`` precedent).
+Template-specific helpers live here. CR-version helpers shared with
+``local_cr_version`` live in :mod:`._common_cr`, extracted on the same
+two-consumer threshold that produced ``_common_helmfile.py``.
 """
 
 from __future__ import annotations

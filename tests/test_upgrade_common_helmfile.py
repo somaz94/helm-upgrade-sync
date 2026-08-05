@@ -1,7 +1,7 @@
-"""Unit tests for scripts/python/upgrade_core/_common_helmfile.py.
+"""Unit tests for upgrade_core/_common_helmfile.py.
 
 Covers the 11 helmfile-flavored helpers extracted in the shell -> python migration
-(the migration). The K6/K8 modules now import these via alias, and K9
+The sibling modules now import these via alias, and ``external-oci``
 relies on the extraction to keep its hook overrides thin.
 
 Stdlib unittest only.

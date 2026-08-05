@@ -1,9 +1,8 @@
 """Local CR-version upgrade runner (local-cr-version template).
 
-Migrated from ``scripts/upgrade-sync/templates/local-cr-version.sh``
-(during the shell -> python migration). **Sister template** of
-:mod:`external_oci_cr_version` (K13). The two share ~90% of helpers via
-:mod:`._common_cr` (extracted in K12).
+Migrated from ``templates/local-cr-version.sh`` during the shell -> python
+migration. **Sister template** of :mod:`external_oci_cr_version`; the two
+share ~90% of their helpers via :mod:`._common_cr`.
 
 Used by LOCAL Helm charts that wrap a Custom Resource and have **no
 upstream Helm chart** to sync from. Typical shape:
@@ -35,7 +34,7 @@ Difference vs K13 (``external-oci-cr-version``):
     there's no upstream OCI pin to track.
 
 **0 consumer** currently (orphan template, scaffolding for future
-operators per ``scripts/upgrade-sync/README.md`` — CNPG / Strimzi /
+operators per ``README.md`` — CNPG / Strimzi /
 Redis Operator extension path). Kept around because the helper set is
 already exercised by K13's 2 consumers (elasticsearch + kibana) and the
 ``_common_cr.py`` shared layer makes maintenance free.

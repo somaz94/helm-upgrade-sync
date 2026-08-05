@@ -2,10 +2,10 @@
 
 Drives the upgrade flow shared by external Helm charts that use a helm repo
 + helmfile layout. Migrated from the canonical bash template at
-``scripts/upgrade-sync/templates/external-standard.sh`` as part of the
-the shell -> python migration shell -> python migration.
+``templates/external-standard.sh`` as part of the
+the shell -> python migration.
 
-In the shell -> python migration the helmfile-flavored helpers (Chart.yaml /
+The helmfile-flavored helpers (Chart.yaml /
 helmfile.yaml parsing, subprocess wrappers, helmfile pin rewrite,
 chart-flavored list / rollback) were extracted to
 :mod:`_common_helmfile`, and three extension points were added to
@@ -20,10 +20,10 @@ specific steps without forking the body:
   - ``helmfile_pin_hook`` replaces the default
     :func:`_common_helmfile.update_helmfile_pins` call (used by K9
     tracked-chart scope which limits the rewrite to one release block).
-  - ``post_pin_hook`` (introduced in the shell -> python migration) still fires after the pin
+  - ``post_pin_hook`` still fires after the pin
     rewrite for image-tag-style follow-up steps.
 
-In the shell -> python migration two more hooks plus ``total_steps`` were
+Two more hooks plus ``total_steps`` were
 added so the external-oci-with-mirror variant fits the same body:
 
   - ``values_summary_hook`` runs after the Step 1 helmfile releases
@@ -102,7 +102,7 @@ ChartWriteHook = Callable[..., None]
 HelmfilePinHook = Callable[..., int]
 
 # Step 7 — post-pin extension (e.g. image-tag rewrite). Fires after the
-# helmfile pin rewrite and before auto-prune. Same kwargs as the shell -> python migration.
+# helmfile pin rewrite and before auto-prune.
 PostPinHook = Callable[..., None]
 
 # Step 1 — surface per-values-file overrides after the helmfile releases
@@ -149,12 +149,12 @@ def run(
       - ``chart_write_hook`` — replaces Step 7 (or Step 8 when
         ``total_steps=8``) chart write block.
       - ``helmfile_pin_hook`` — replaces helmfile pin rewrite.
-      - ``post_pin_hook`` — runs after the pin rewrite (the shell -> python migration pattern).
+      - ``post_pin_hook`` — runs after the pin rewrite.
       - ``values_summary_hook`` — runs after the Step 1 helmfile releases
-        list (the shell -> python migration pattern). ``None`` falls back to a K10 default that
+        list. ``None`` falls back to a default that
         prints ``image.tag`` per ``values/*.yaml`` via yq.
       - ``pre_apply_hook`` — runs as a numbered step between the breaking-
-        changes scan and the Apply step (the shell -> python migration pattern). Used only when
+        changes scan and the Apply step. Used only when
         ``total_steps=8``; ignored for ``total_steps=7``.
       - ``pin_write_hook`` — replaces the version pin write (argocd-pin
         pattern). When supplied it fires on apply regardless of helmfile

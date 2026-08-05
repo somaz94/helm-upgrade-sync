@@ -18,7 +18,7 @@ so the per-chart ``do_mirror`` function can call ``crane copy`` in the
 same shape as the bash template's ``mirror_image`` shell helper.
 
 Migrated from the canonical bash template at
-``scripts/upgrade-sync/templates/external-oci-with-mirror.sh``.
+``templates/external-oci-with-mirror.sh``.
 
 Public entry-point: ``run(config, argv, script_path)``.
 """

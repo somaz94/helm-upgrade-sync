@@ -1,4 +1,4 @@
-"""Unit tests for scripts/python/upgrade_sync/fetchers.py.
+"""Unit tests for upgrade_sync/fetchers.py.
 
 Upstream version + container-image fetchers extracted from
 ``check-versions.py``. All network and subprocess interactions are

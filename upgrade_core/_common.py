@@ -1,7 +1,7 @@
 """Shared helpers for upgrade_core template modules.
 
-Extracted in Phase 4 / the shell -> python migration once a third template (K8 =
-external-with-image-tag) confirmed that K6 + K7 + K8 share the same
+Extracted once a third template (``external-with-image-tag``) confirmed that
+it, ``external-standard`` and ``ansible-github-release`` share the same
 backup-directory layout and exclude-pattern semantics. Public API names
 intentionally drop the module-private ``_`` prefix the originating
 modules used.

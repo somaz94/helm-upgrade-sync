@@ -1,4 +1,4 @@
-"""Unit tests for scripts/upgrade-sync/check-versions.py.
+"""Unit tests for check-versions.py.
 
 Stdlib unittest only — keeps dep surface at zero so the suite runs under
 both the helmfile-tools image's system python3 and any local venv.

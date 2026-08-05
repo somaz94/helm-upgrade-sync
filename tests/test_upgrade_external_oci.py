@@ -1,4 +1,4 @@
-"""Unit tests for scripts/python/upgrade_core/external_oci.py.
+"""Unit tests for upgrade_core/external_oci.py.
 
 The K9 module is a thin extension of :mod:`external_standard` via three
 hook injection points (during the shell -> python migration). Coverage focuses

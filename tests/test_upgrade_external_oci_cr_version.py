@@ -1,6 +1,6 @@
-"""Unit tests for scripts/python/upgrade_core/external_oci_cr_version.py.
+"""Unit tests for upgrade_core/external_oci_cr_version.py.
 
-K13 (steadfast-condor) is an **independent** module — does not extend
+``external_oci_cr_version`` is an **independent** module — does not extend
 :mod:`external_standard` via hooks. Shared CR helpers were extracted to
 :mod:`upgrade_core._common_cr` in the shell -> python migration — those have
 their own test file (``test_upgrade_common_cr.py``).

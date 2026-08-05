@@ -1,9 +1,9 @@
 """Shared helmfile-flavored helpers for upgrade_core template modules.
 
-Extracted in Phase 4 / the shell -> python migration once a third helmfile-using
-template (K9 = external-oci) confirmed the K6 + K8 + K9 cluster shares
-the same Chart.yaml / helmfile.yaml parsing surface and the same
-chart-flavored backup list + rollback semantics. K7 (ansible-github-release)
+Extracted once a third helmfile-using template (``external-oci``) confirmed
+that it, ``external-standard`` and ``external-with-image-tag`` share the
+same Chart.yaml / helmfile.yaml parsing surface and the same
+chart-flavored backup list + rollback semantics. ``ansible-github-release``
 intentionally does NOT use this module — its backup list / rollback are
 ansible-flavored and its yaml parsing has different quote-preserving
 semantics.

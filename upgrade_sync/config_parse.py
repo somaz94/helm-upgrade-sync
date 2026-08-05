@@ -1,7 +1,7 @@
 """CONFIG-block parsing for the managed upgrade.py templates.
 
-Extracted from ``scripts/upgrade-sync/check-versions.py`` so the parser
-can be unit-tested and reused (e.g. by ``scripts/ci/auto-upgrade.py``)
+Extracted from ``check-versions.py`` so the parser
+can be unit-tested and reused by CI orchestrators
 without pulling in the orchestrator's full dependency surface.
 
 The CONFIG block is the canonical metadata header carried by every
@@ -17,7 +17,7 @@ fences delimit it:
     # ==========================================
 
 Both bash form (``KEY="VALUE"``) and Python dict form
-(``"KEY": "VALUE",``) are accepted — The shell -> python migration migrated every
+(``"KEY": "VALUE",``) are accepted — the shell -> python migration moved every
 canonical template + every consumer to ``.py``, so the dict form is
 dominant, but the bash form is still seen in ``_optional/`` and
 ``_deprecated/`` trees which the discovery walker may still visit.
@@ -130,7 +130,7 @@ def parse_config_block(upgrade_script: Path) -> ConfigVars:
 
     Handles both bash (``KEY="VALUE"``) and Python dict
     (``"KEY": "VALUE",``) line shapes — the K6+ canonical templates
-    switched from ``.sh`` to ``.py`` over the shell -> python migration, so the
+    switched from ``.sh`` to ``.py`` over that migration, so the
     CONFIG block now comes in two flavors. Bash form is tried first; on
     miss the Python dict form is tried. Unknown keys are silently
     ignored (matches the bash version's ``set +u`` tolerance).

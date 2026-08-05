@@ -1,4 +1,4 @@
-"""Unit + integration tests for scripts/python/upgrade_core/argocd_pin.py.
+"""Unit + integration tests for upgrade_core/argocd_pin.py.
 
 The ``argocd-pin`` template is a thin dispatcher that reuses the
 external_standard / external_oci_with_mirror flow and swaps only the

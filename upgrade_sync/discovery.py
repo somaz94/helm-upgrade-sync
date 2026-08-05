@@ -5,9 +5,9 @@ Mirrors the bash ``find_managed_files`` / ``find_unmanaged_charts`` /
 
 Three call sites share these helpers:
 
-- ``scripts/upgrade-sync/sync.py`` (this package's CLI entry point)
-- ``scripts/upgrade-sync/check-versions.py`` (version-probe orchestrator)
-- ``scripts/ci/auto-upgrade.py`` (CI orchestrator)
+- ``sync.py`` (this package's CLI entry point)
+- ``check-versions.py`` (version-probe orchestrator)
+- CI upgrade orchestrators
 
 The bash original walked ``find -type f -name upgrade.{sh,py}`` with five
 path exclusions; this module ports the same exclusions over ``Path.rglob``.
@@ -30,7 +30,7 @@ _EXCLUDED_SUBSTRINGS: tuple[str, ...] = (
 
 # Filenames that the discovery treats as "managed upgrade scripts".
 # The bash original walked ``-name 'upgrade.sh' -o -name 'upgrade.py'``;
-# The shell -> python migration migrated every canonical template + every consumer to
+# The shell -> python migration moved every canonical template + every consumer to
 # ``.py``. The ``.sh`` glob is kept here for forward compatibility (e.g.
 # an experimental fixture chart that hasn't been migrated yet).
 _UPGRADE_FILENAMES: tuple[str, ...] = ("upgrade.sh", "upgrade.py")

@@ -4,9 +4,9 @@
 # Used by external Helm charts that also need automatic image tag updates
 # in their values/*.yaml files (looks for `tag: vX.Y.Z` patterns and rewrites
 # them to match the new appVersion). See `_rewrite_image_tags` in
-# scripts/python/upgrade_core/external_with_image_tag.py for the full rule.
+# upgrade_core/external_with_image_tag.py for the full rule.
 # Real per-chart upgrade.py files are kept in sync via:
-#   scripts/upgrade-sync/sync.py --apply
+#   sync.py --apply
 # Only the body below the third `# ===` marker is propagated.
 
 # ============================================================

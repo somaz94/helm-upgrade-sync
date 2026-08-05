@@ -1,4 +1,4 @@
-"""Unit tests for scripts/python/upgrade_sync/yaml_helpers.py.
+"""Unit tests for upgrade_sync/yaml_helpers.py.
 
 Top-level scalar YAML reader + helmfile chart-pin reader, extracted
 from ``check-versions.py``. Fixtures live under ``tests/python/fixtures/``

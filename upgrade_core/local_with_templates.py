@@ -29,8 +29,8 @@ Helper modules :mod:`_common` (backup helpers + SEPARATOR) and
 helmfile pin rewrite / subprocess wrappers) are reused.
 
 Migrated from the canonical bash template at
-``scripts/upgrade-sync/templates/local-with-templates.sh`` as part of
-Phase 4 / the shell -> python migration.
+``templates/local-with-templates.sh`` as part of
+the shell -> python migration.
 
 Public entry-point: ``run(config, argv, script_path)``.
 """

@@ -1,14 +1,13 @@
 """Shared helpers for Custom Resource (CR) version upgrade templates.
 
 Used by:
-  - K12 (``local_cr_version``) — local CR wrapper chart, Chart.yaml + values
+  - ``local_cr_version`` — local CR wrapper chart, Chart.yaml + values
     upgrade with optional ``MIRROR_CHART_VERSION`` mirror.
-  - K13 (``external_oci_cr_version``) — external OCI chart consumer, Stack
+  - ``external_oci_cr_version`` — external OCI chart consumer, Stack
     version + OCI chart pin two-track upgrade.
 
-Extracted in the shell -> python migration (sub-plan ``the migration``) once K11/K13
-established the 2-datapoint precedent for K9 ``_common_helmfile.py``-style
-helper consolidation. Both consumers use the same:
+Extracted on the same two-consumer threshold that produced
+``_common_helmfile.py``. Both consumers use the same:
 
   - Multi-source version fetching (elastic-artifacts / github-releases /
     docker-hub-tags) with image-availability fallback.

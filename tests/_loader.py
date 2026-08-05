@@ -1,11 +1,11 @@
 """Shared module loader for tests under ``tests/python/``.
 
-Adds ``scripts/python/`` to ``sys.path`` (idempotent) and imports the
-named module via ``importlib.import_module``. This matches the consumer
-thin-wrapper's ancestor-walk pattern, so test-side imports resolve
-``upgrade_core.<name>`` the same way runtime invocations do.
+Adds the package root to ``sys.path`` (idempotent) and imports the named
+module via ``importlib.import_module``. Resolution matches the consumer
+thin-wrapper's pattern, so test-side imports resolve ``upgrade_core.<name>``
+the same way runtime invocations do under either layout.
 
-Introduced in the shell -> python migration Refactor #3 to remove the four-way
+Introduced to remove the four-way
 duplication of the ``_load_module`` helper across test files.
 """
 

@@ -1,6 +1,6 @@
 """Upstream version fetchers + container-image existence probe.
 
-Extracted from ``scripts/upgrade-sync/check-versions.py`` so the network
+Extracted from ``check-versions.py`` so the network
 calls can be unit-tested in isolation and reused by future tools.
 
 Public API:

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Thin entry-point wrapper for the backup-management system.
 
-See ``scripts/python/upgrade_sync/manage_backups.py`` for the actual
-implementation. This wrapper resolves the package root via an ancestor
-walk (same pattern as the the consumer upgrade.py files) so the
-module is importable from any cwd.
+See ``upgrade_sync/manage_backups.py`` for the actual implementation.
+This wrapper resolves the package root the same way the managed
+``upgrade.py`` consumers do, so the module is importable from any cwd
+under either the standalone or the embedded layout.
 """
 
 from __future__ import annotations

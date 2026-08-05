@@ -1,4 +1,4 @@
-"""Unit tests for scripts/python/upgrade_sync/config_parse.py.
+"""Unit tests for upgrade_sync/config_parse.py.
 
 CONFIG-block parsing (extracted from ``check-versions.py``) — see the
 module docstring for the input grammar. Tests use the same fixtures as

@@ -1,4 +1,4 @@
-"""Unit tests for scripts/python/upgrade_core/_common_cr.py.
+"""Unit tests for upgrade_core/_common_cr.py.
 
 Shared CR-version helpers used by both K12 (``local_cr_version``) and
 K13 (``external_oci_cr_version``). Coverage focuses on:

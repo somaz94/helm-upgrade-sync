@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Thin entry-point wrapper for the upgrade-sync system.
 
-Located alongside ``check-versions.py`` and the canonical ``templates/``
-so that operators reach for ``scripts/upgrade-sync/sync.py`` (or, via the
-canonical wrapper, ``scripts/python/run.sh sync.py``). The actual logic
-lives in ``scripts/python/upgrade_sync/`` — this file just resolves the
-package root via an ancestor walk and dispatches to ``cli.main``.
+Sits alongside ``check-versions.py`` and the canonical ``templates/``.
+The actual logic lives in ``upgrade_sync/`` — this file only resolves the
+package root and dispatches to ``cli.main``.
 
-The ancestor walk mirrors every consumer's pattern so the file
-also works when invoked from an arbitrary cwd or via a symlink.
+Resolution handles both layouts: a standalone checkout keeps the packages
+next to this script, while an embedded copy at ``<repo>/scripts/upgrade-sync/``
+finds them under ``<repo>/scripts/python/``. Either way the file works when
+invoked from an arbitrary cwd or through a symlink.
 """
 
 from __future__ import annotations

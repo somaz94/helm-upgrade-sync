@@ -12,8 +12,8 @@ directory, the active ``--exclude`` patterns, and the freshly resolved
 ``latest_app_version``.
 
 Migrated from the canonical bash template at
-``scripts/upgrade-sync/templates/external-with-image-tag.sh`` as part of
-the Phase 4 / the shell -> python migration shell -> python migration.
+``templates/external-with-image-tag.sh`` during the shell -> python
+migration.
 
 Public entry-point: ``run(config, argv, script_path)``.
 """

@@ -2,10 +2,10 @@
 """check-versions.py — read-only preflight that reports which managed charts
 have an upstream upgrade available.
 
-Callers — `scripts/ci/auto-upgrade.py`, `.gitlab/ci/upgrade-pipeline.yml`'s
-`check_versions` job, and any human invocation — share one CLI:
+Human invocations and CI upgrade jobs share one CLI:
 
   check-versions.py [--only <substring>]... [--no-update] [--updates-only]
+                    [--repo-root <dir>]
 
 Supported template types (matched against the `# upgrade-template:` header
 on line 2 of each managed upgrade.sh):

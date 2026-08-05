@@ -1,7 +1,7 @@
-"""Unit tests for scripts/python/upgrade_core/external_oci_with_mirror.py.
+"""Unit tests for upgrade_core/external_oci_with_mirror.py.
 
 The K10 module wraps K9 (external_oci) with two extra hooks that the
-external_standard runner gained in Phase 4 / the shell -> python migration:
+external_standard runner gained during the shell -> python migration:
 
   - ``pre_apply_hook`` drives the Step 7 mirror stage.
   - ``values_summary_hook`` surfaces image.tag overrides at Step 1.

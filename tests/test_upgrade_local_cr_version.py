@@ -1,6 +1,7 @@
-"""Unit tests for scripts/python/upgrade_core/local_cr_version.py.
+"""Unit tests for upgrade_core/local_cr_version.py.
 
-K12 (the migration) is an **independent** module — sister of K13
+``local_cr_version`` is an **independent** module — sister of
+``external_oci_cr_version``
 (``external_oci_cr_version``). Shared CR helpers live in
 :mod:`upgrade_core._common_cr`. K12-specific helpers covered here:
 

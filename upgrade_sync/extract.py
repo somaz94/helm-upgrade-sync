@@ -23,7 +23,7 @@ def canonical_path(templates_dir: Path, name: str, ext: str = "sh") -> Path:
     Exits process with code 2 (mirroring bash ``canonical_path``) when the
     requested flavor is missing. Falls back from .py → .sh only when the
     requested .py canonical does not exist and the .sh canonical does —
-    matches the the mixed-mode safety check.
+    matches the mixed-mode safety check.
     """
     path = templates_dir / f"{name}.{ext}"
     if path.is_file():

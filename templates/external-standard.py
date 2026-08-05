@@ -3,7 +3,7 @@
 # Source of truth for the "external-standard" upgrade.py body.
 # Used by external Helm charts (helm repo + helmfile) with the default flow.
 # Real per-chart upgrade.py files are kept in sync via:
-#   scripts/upgrade-sync/sync.py --apply
+#   sync.py --apply
 # Only the body below the third `# ===` marker is propagated.
 
 # ============================================================

@@ -1,4 +1,4 @@
-"""Unit tests for scripts/python/upgrade_core/ansible_github_release.py.
+"""Unit tests for upgrade_core/ansible_github_release.py.
 
 Stdlib unittest only — keeps dep surface at zero so the suite runs under
 both the helmfile-tools image's system python3 and any local venv.

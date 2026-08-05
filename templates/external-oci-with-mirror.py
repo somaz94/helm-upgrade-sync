@@ -32,7 +32,7 @@
 #                           caller (non-zero aborts via do_mirror).
 #
 # Real per-chart upgrade.py files are kept in sync via:
-#   scripts/upgrade-sync/sync.py --apply
+#   sync.py --apply
 # Only the body below the third `# ===` marker is propagated.
 
 # ============================================================
