@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # github-actions is the only ecosystem here — the tool is standard library
+  # only, so there is no requirements.txt / lockfile for dependabot to track.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor:
+        update-types:
+          - minor
+          - patch
