@@ -11,7 +11,7 @@ This module collects them across every consumer and exposes four commands:
 
 Discovery shares ``upgrade_sync.discovery.find_managed_files`` with sync.py /
 check-versions.py / auto-upgrade.py — the bash original walked only
-``upgrade.sh`` (legacy from Phase 1) which silently found zero charts post-K12
+``upgrade.sh`` (legacy from Phase 1) which silently found zero charts after the migration
 once every consumer became ``upgrade.py``. Importing the shared discovery
 restores the correct walk over ``upgrade.{sh,py}``.
 """

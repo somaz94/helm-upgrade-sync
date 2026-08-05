@@ -192,7 +192,8 @@ class IsExcludedTests(unittest.TestCase):
 
 
 class PromptSelectBackupTests(unittest.TestCase):
-    """Tests for the prompt_select_backup helper shared by K7/K11/K12/K13."""
+    """Tests for prompt_select_backup, shared by ``ansible_github_release``,
+    ``local_with_templates``, and both CR templates."""
 
     def _backups(self, n: int) -> list[Path]:
         return [Path(f"backup/2026010{i}_000000") for i in range(1, n + 1)]
@@ -257,8 +258,8 @@ class PromptSelectBackupTests(unittest.TestCase):
 
 class PromptMajorBumpTests(unittest.TestCase):
     """``prompt_major_bump`` covers the shared MAJOR-bump banner +
-    optional confirmation prompt used by K7 (ansible_github_release),
-    K12 (local_cr_version), and K13 (external_oci_cr_version)."""
+    optional confirmation prompt used by ``ansible_github_release``,
+    ``local_cr_version``, and ``external_oci_cr_version``."""
 
     CHANGELOG_URL = "https://example/changelog"
 
@@ -354,7 +355,7 @@ class PromptMajorBumpTests(unittest.TestCase):
         self.assertIn("Aborted.", out.getvalue())
 
     def test_extra_lines_inserted_between_bump_and_changelog(self) -> None:
-        """Stateful CR consumers (K12/K13) inject the data-backup
+        """Stateful CR consumers inject the data-backup
         warning between the BUMP line and the changelog line."""
         sys.stdin = io.StringIO("y\n")
         try:

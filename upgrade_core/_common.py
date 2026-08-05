@@ -14,7 +14,8 @@ Exported helpers — all stdlib-only:
 - :func:`auto_prune_backups` — silent prune called at the end of a
   successful upgrade.
 - :func:`is_excluded` — substring match against a comma-separated pattern
-  string (used by the ``--exclude`` flag in K6 + K8; not used by K7).
+  string (used by the ``--exclude`` flag in the chart-flavored templates;
+  not used by ``ansible_github_release``).
 """
 
 from __future__ import annotations
@@ -35,14 +36,13 @@ from pathlib import Path
 SEPARATOR = "------------------------------------------------"
 DOUBLE_SEP = "================================================"
 
-# GitHub Releases API page size used by both K7 (ansible-github-release)
-# and K9 (external-oci) when scanning recent releases.
+# GitHub Releases API page size used by both ``ansible_github_release``
+# and ``external_oci`` when scanning recent releases.
 GITHUB_RELEASES_PER_PAGE = 100
 GITHUB_RECENT_RELEASES_PER_PAGE = 30
 
 # Backup-directory timestamp + retention defaults shared across every
-# template module (K6 / K7 / K8 / K10 / K11 / K12 / K13 ...). The
-# format string and retention value were inlined as magic literals in
+# template module. The format string and retention value were inlined in
 # each template; consolidating them here keeps the bash byte-for-byte
 # behavior while exposing a single point of change.
 BACKUP_TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
@@ -53,7 +53,7 @@ def now_timestamp() -> str:
     """Return ``datetime.now().strftime(BACKUP_TIMESTAMP_FORMAT)``.
 
     Centralizes the ``YYYYMMDD_HHMMSS`` literal used in every template's
-    backup-dir naming + chart-pin backup naming (K12/K13).
+    backup-dir naming + chart-pin backup naming (the CR templates).
     """
     return datetime.now().strftime(BACKUP_TIMESTAMP_FORMAT)
 
@@ -150,8 +150,8 @@ def is_excluded(filename: str, patterns: str) -> bool:
 # YAML helpers (top-level string field read/write)
 # -----------------------------------------------
 #
-# Lifted from ``_common_cr`` (where they originated for K12/K13) once
-# K7 (ansible_github_release) wanted to drop its own near-identical copy.
+# Lifted from ``_common_cr`` (where they originated for the CR templates) once
+# ``ansible_github_release`` wanted to drop its own near-identical copy.
 # The helpers are pure top-level string-value parsing — no CR / kubectl
 # semantics — so they live in the domain-neutral ``_common`` module.
 
@@ -228,10 +228,12 @@ def prompt_select_backup(backups: list[Path]) -> Path:
     any invalid input. Caller is expected to have already verified
     ``backups`` is non-empty.
 
-    Consolidates the identical prompt block used by K12, K13, K11, K7, and
+    Consolidates the identical prompt block used by ``local_cr_version``,
+    ``external_oci_cr_version``, ``local_with_templates``,
+    ``ansible_github_release``, and
     the chart-flavored :func:`_common_helmfile.do_rollback`. The EOF
-    handling (``input`` raises :class:`EOFError`) matches K7 / K11 /
-    ``_common_helmfile`` defensive behavior; K12 / K13 gain the same
+    handling (``input`` raises :class:`EOFError`) matches ``ansible_github_release`` / ``local_with_templates`` /
+    ``_common_helmfile`` defensive behavior; ``local_cr_version`` / ``external_oci_cr_version`` gain the same
     graceful default as a strict UX improvement.
     """
     try:
@@ -250,7 +252,7 @@ def prompt_select_backup(backups: list[Path]) -> Path:
 
 
 # -----------------------------------------------
-# GitHub Releases helpers (shared by K7 + K9)
+# GitHub Releases helpers (shared by ``ansible_github_release`` + ``external_oci``)
 # -----------------------------------------------
 
 def _github_releases_request(url: str, *, timeout: float = 10.0) -> str:
@@ -280,7 +282,7 @@ def fetch_github_ga_versions(github_repo: str, major_pin: str = "") -> list[str]
     the bash inline ``python3 -c`` block in ``ansible-github-release.sh``
     — same fields, same filters, same sort key.
 
-    Used by K7 (ansible-github-release). Named ``fetch_github_ga_versions``
+    Used by ``ansible_github_release``. Named ``fetch_github_ga_versions``
     (not ``fetch_ga_versions``) to avoid collision with the 3-source
     homonym in ``_common_cr`` (different signature, different backend).
     """
@@ -328,7 +330,7 @@ def fetch_latest_release_tag(github_repo: str, tag_prefix: str = "v") -> str:
         ``keycloak-cr-`` prefix): scan ``/releases?per_page=30`` and
         return the first tag whose name starts with ``tag_prefix``.
 
-    Used by K9 (external-oci). Empty string on any error or no match.
+    Used by ``external_oci``. Empty string on any error or no match.
     """
     if not github_repo:
         return ""
@@ -369,13 +371,14 @@ def fetch_latest_release_tag(github_repo: str, tag_prefix: str = "v") -> str:
 
 
 # =============================================================
-# MAJOR-bump confirmation prompt — shared by K7 / K12 / K13
+# MAJOR-bump confirmation prompt — shared by ``ansible_github_release``
+# and both CR templates
 # =============================================================
 
 _MAJOR_BANNER = "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 
 # Extra warning lines appended (between the BUMP line and the changelog
-# line) by K12 (``local_cr_version``) and K13 (``external_oci_cr_version``).
+# line) by ``local_cr_version`` and ``external_oci_cr_version``.
 # Stateful CR consumers (Elasticsearch / Kibana / future operators) carry
 # data that is not reversible across a major bump — surface the operator
 # backup requirement before the user confirms.

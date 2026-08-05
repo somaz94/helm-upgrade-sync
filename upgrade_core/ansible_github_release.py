@@ -144,7 +144,7 @@ Examples:
 
 # -----------------------------------------------
 # YAML helpers (top-level string value read + quote-preserving update)
-# come from ``_common`` (moved in Phase 3 from the K12/K13 ``_common_cr``
+# come from ``_common`` (moved there from the CR templates' ``_common_cr``
 # module so non-CR templates can use them without a CR-domain
 # dependency). Module-level aliases preserve the original ``ag.``
 # names for the test suite.

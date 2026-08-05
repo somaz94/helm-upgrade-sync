@@ -2,8 +2,8 @@
 
 Thin extension of :mod:`external_oci` for charts whose upstream images
 must be mirrored to a private registry (Harbor) before the chart upgrade
-is applied. The 8-step flow reuses K9's hooks (``fetch_latest_hook``,
-``chart_write_hook``, ``helmfile_pin_hook``) and adds two K10-only hooks
+is applied. The 8-step flow reuses ``external_oci``'s hooks (``fetch_latest_hook``,
+``chart_write_hook``, ``helmfile_pin_hook``) and adds two ``external_oci_with_mirror``-only hooks
 introduced in :mod:`external_standard`:
 
   - ``pre_apply_hook`` runs as ``[Step 7/8]`` and drives the mirror
@@ -11,7 +11,7 @@ introduced in :mod:`external_standard`:
     Skipped in dry-run with a SKIPPED message.
   - ``values_summary_hook`` runs at the tail of Step 1 and surfaces
     per-values-file ``image.tag`` overrides. When the consumer omits the
-    hook the K10 default (yq-based ``.image.tag`` per file) takes over.
+    hook the ``external_oci_with_mirror`` default (yq-based ``.image.tag`` per file) takes over.
 
 A ``mirror_image`` helper is exposed for consumer ``upgrade.py`` files
 so the per-chart ``do_mirror`` function can call ``crane copy`` in the
@@ -152,8 +152,8 @@ def run(
     """Entry-point invoked by each consumer ``upgrade.py``.
 
     Delegates to :func:`external_standard.run` with ``total_steps=8``
-    plus K9 (external-oci) hooks for OCI fetch / wrapper-mode chart
-    write / tracked-chart helmfile pin scope, and K10 hooks for the
+    plus ``external_oci`` hooks for OCI fetch / wrapper-mode chart
+    write / tracked-chart helmfile pin scope, and ``external_oci_with_mirror`` hooks for the
     mirror stage (``pre_apply_hook``) and Step 1 values summary
     (``values_summary_hook``).
 
@@ -164,10 +164,10 @@ def run(
     non-zero to abort. ``print_values_summary`` accepts ``values_dir``.
 
     CONFIG keys consumed:
-      - ``GITHUB_REPO`` / ``GITHUB_TAG_PREFIX`` (K9 inherit).
-      - ``WRAPPER_CHART_YAML`` / ``HELMFILE_TRACKED_CHART`` (K9 inherit).
+      - ``GITHUB_REPO`` / ``GITHUB_TAG_PREFIX`` (``external_oci`` inherit).
+      - ``WRAPPER_CHART_YAML`` / ``HELMFILE_TRACKED_CHART`` (``external_oci`` inherit).
       - ``do_mirror`` (callable; optional). Missing = silent skip.
-      - ``print_values_summary`` (callable; optional). Missing = K10
+      - ``print_values_summary`` (callable; optional). Missing = ``external_oci_with_mirror``
         default (yq-based ``.image.tag`` per ``values/*.yaml``).
     """
     github_repo = config["GITHUB_REPO"]
@@ -270,7 +270,7 @@ def _make_values_summary_hook(print_values_summary):
     ``None`` so the external_standard default kicks in.
 
     Returning ``None`` here is critical: when the consumer omits the
-    override, the K10 ``_default_values_summary`` baseline (yq-based
+    override, the ``external_oci_with_mirror`` ``_default_values_summary`` baseline (yq-based
     ``.image.tag`` per ``values/*.yaml``) must run. Building a closure
     that calls the default would double-print.
     """

@@ -5,7 +5,7 @@
 :mod:`upgrade_core._common_cr` in the shell -> python migration — those have
 their own test file (``test_upgrade_common_cr.py``).
 
-This file covers K13-specific helpers only:
+This file covers ``external_oci_cr_version``-specific helpers only:
   - Backup classifier (chart vs stack) + reader (N15 — values_file-aware)
   - OCI chart-pin helpers (read/update gotmpl hoist + indented version)
   - List chart versions (publisher releases filtered by CHART_NAME)
@@ -34,7 +34,7 @@ ecv = load("upgrade_core.external_oci_cr_version")
 
 
 # =============================================================
-# Backup classifier + version reader (K13-specific)
+# Backup classifier + version reader (``external_oci_cr_version``-specific)
 # =============================================================
 
 
@@ -128,7 +128,7 @@ class ReadBackupVersionTests(unittest.TestCase):
 
 
 # =============================================================
-# OCI chart-pin helpers (K13-specific)
+# OCI chart-pin helpers (``external_oci_cr_version``-specific)
 # =============================================================
 
 

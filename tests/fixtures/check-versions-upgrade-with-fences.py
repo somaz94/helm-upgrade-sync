@@ -2,7 +2,7 @@
 # upgrade-template: external-oci-cr-version
 
 # ============================================================
-# Configuration (Python dict CONFIG fixture — K6+ canonical form)
+# Configuration (Python dict CONFIG fixture — Python canonical form)
 # ============================================================
 CONFIG = {
     "SCRIPT_NAME":            "Elasticsearch (ECK CR, OCI chart) Stack Version Upgrade Script",

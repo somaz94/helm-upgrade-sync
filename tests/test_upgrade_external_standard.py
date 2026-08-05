@@ -661,7 +661,7 @@ class RunFlowTests(unittest.TestCase):
 
     def _k10_handler(self):
         """Handler that emits a real version bump (1.0.0 → 1.1.0) so Step 7
-        is reached. Used by the K10-flavored tests below."""
+        is reached. Used by the ``external_oci_with_mirror``-flavored tests below."""
         def handler(cmd):
             if cmd[:2] == ["helm", "search"]:
                 return '[{"version":"1.1.0","app_version":"7.1.0"}]'
@@ -677,7 +677,7 @@ class RunFlowTests(unittest.TestCase):
         return handler
 
     def test_dry_run_skips_pre_apply_hook_when_total_steps_eight(self) -> None:
-        """K10 dry-run: SKIPPED line + Step 8 DRY-RUN, hook not called."""
+        """``external_oci_with_mirror`` dry-run: SKIPPED line + Step 8 DRY-RUN, hook not called."""
         hook = mock.Mock(return_value=0)
         buf = io.StringIO()
         with mock.patch("subprocess.run", side_effect=_fake_subprocess(self._k10_handler())):
@@ -696,7 +696,7 @@ class RunFlowTests(unittest.TestCase):
         self.assertIn("[Step 8/8] DRY-RUN complete. No files were changed.", out)
 
     def test_total_steps_eight_renders_all_step_headers(self) -> None:
-        """K10 non-dry-run: every step header renders as ``/8`` and the
+        """``external_oci_with_mirror`` non-dry-run: every step header renders as ``/8`` and the
         final Apply line lands at ``[Step 8/8]``."""
         hook = mock.Mock(return_value=0)
         buf = io.StringIO()
@@ -725,7 +725,7 @@ class RunFlowTests(unittest.TestCase):
             self.assertIn(expected, out, f"missing header line: {expected!r}")
 
     def test_pre_apply_hook_non_zero_aborts_and_propagates_rc(self) -> None:
-        """K10 mirror failure: hook returns rc -> _apply_upgrade returns
+        """``external_oci_with_mirror`` mirror failure: hook returns rc -> _apply_upgrade returns
         the same rc and prints the abort line to stderr; Step 8 Apply
         header MUST NOT appear."""
         hook = mock.Mock(return_value=7)
@@ -748,7 +748,7 @@ class RunFlowTests(unittest.TestCase):
         self.assertIn("Aborting upgrade (no files modified)", err_buf.getvalue())
 
     def test_pre_apply_hook_none_with_total_steps_eight_prints_skip(self) -> None:
-        """K10 with do_mirror omitted: Step 7 'Mirror stage skipped' line
+        """``external_oci_with_mirror`` with do_mirror omitted: Step 7 'Mirror stage skipped' line
         appears, Step 8 Apply still runs."""
         buf = io.StringIO()
         with mock.patch("subprocess.run", side_effect=_fake_subprocess(self._k10_handler())):

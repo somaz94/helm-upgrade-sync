@@ -1,7 +1,7 @@
 """Unit tests for upgrade_core/_common_cr.py.
 
-Shared CR-version helpers used by both K12 (``local_cr_version``) and
-K13 (``external_oci_cr_version``). Coverage focuses on:
+Shared CR-version helpers used by both ``local_cr_version`` and
+``external_oci_cr_version``. Coverage focuses on:
   - 3-backend version fetching (elastic-artifacts / github-releases /
     docker-hub-tags)
   - YAML read/write quote-style preservation
@@ -475,7 +475,7 @@ class ReadLastGoodRevisionTests(unittest.TestCase):
 
 class HandleDowngradeRollbackTests(unittest.TestCase):
     """Byte-parity guard for the manual instructions block previously
-    inlined in K12 + K13 ``_do_rollback``. Operator/webhook config is
+    inlined in both CR templates ``_do_rollback``. Operator/webhook config is
     intentionally left empty so the auto-webhook branch is skipped and
     we exercise the 7-step manual path."""
 

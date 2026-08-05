@@ -16,27 +16,27 @@ What this script does:
   1. Reads the current version from ``<CHART_DIR>/<VALUES_FILE>``.
   2. Queries the component's version feed for the latest GA version
      (one of ``elastic-artifacts`` / ``github-releases`` /
-     ``docker-hub-tags`` — same 3 backends as K13).
+     ``docker-hub-tags`` — same 3 backends as ``external_oci_cr_version``).
   3. Verifies the container image exists in the registry before applying.
   4. Diffs and, on apply, updates both ``<VALUES_FILE>.<VERSION_KEY>``
      and ``Chart.yaml.appVersion``. When ``MIRROR_CHART_VERSION`` is
      truthy, also mirrors into ``Chart.yaml.version`` (useful for
      single-CR wrapper charts where chart version == app version).
 
-Difference vs K13 (``external-oci-cr-version``):
+Difference vs ``external-oci-cr-version``:
 
-  - **K12 owns** Chart.yaml (local metadata mirror).
-  - **K12 only**: ``MIRROR_CHART_VERSION`` option.
-  - **K12 only**: backup contains Chart.yaml + values file (K13 backups
+  - **``local_cr_version`` owns** Chart.yaml (local metadata mirror).
+  - **``local_cr_version`` only**: ``MIRROR_CHART_VERSION`` option.
+  - **``local_cr_version`` only**: backup contains Chart.yaml + values file (``external_oci_cr_version`` backups
     are values-only).
-  - **K12 does NOT** have the OCI chart-pin sub-flow
-    (``--check-chart`` / ``--upgrade-chart``) — K12 is a local chart so
+  - **``local_cr_version`` does NOT** have the OCI chart-pin sub-flow
+    (``--check-chart`` / ``--upgrade-chart``) — ``local_cr_version`` is a local chart so
     there's no upstream OCI pin to track.
 
 **0 consumer** currently (orphan template, scaffolding for future
 operators per ``README.md`` — CNPG / Strimzi /
 Redis Operator extension path). Kept around because the helper set is
-already exercised by K13's 2 consumers (elasticsearch + kibana) and the
+already exercised by ``external_oci_cr_version``'s 2 consumers (elasticsearch + kibana) and the
 ``_common_cr.py`` shared layer makes maintenance free.
 
 Public entry-point: ``run(config, argv, script_path=__file__)``.
@@ -73,7 +73,7 @@ from ._common_helmfile import detect_helmfile
 
 
 # =============================================================
-# K12-specific helpers
+# ``local_cr_version``-specific helpers
 # =============================================================
 
 def _read_chart_field(chart_yaml: Path, field: str) -> str:
@@ -96,10 +96,10 @@ def _read_chart_field(chart_yaml: Path, field: str) -> str:
 
 
 def _list_backups(backup_dir: Path, values_file: str) -> None:
-    """Print available K12 backups (Chart.yaml + values file).
+    """Print available ``local_cr_version`` backups (Chart.yaml + values file).
 
-    K12 backups always include the values file and (when present)
-    Chart.yaml — no chart-pin classifier needed (K13 sister).
+    ``local_cr_version`` backups always include the values file and (when present)
+    Chart.yaml — no chart-pin classifier needed (``external_oci_cr_version`` sister).
     """
     print("Available backups:")
     print()
@@ -128,7 +128,7 @@ def _do_rollback(
 ) -> int:
     """Restore Chart.yaml + values file from the selected backup.
 
-    Stack-only path (no chart-pin branch — K12 has no OCI chart pin).
+    Stack-only path (no chart-pin branch — ``local_cr_version`` has no OCI chart pin).
     Detects downgrade vs live CR. On downgrade, defers to
     :func:`._common_cr.handle_downgrade_rollback` (auto-webhook flow or
     manual 7-step instructions).
@@ -191,13 +191,13 @@ def _stack_upgrade(
     target_version: str,
     keep_backups: int,
 ) -> int:
-    """K12 7-step main flow.
+    """``local_cr_version`` 7-step main flow.
 
-    Differs from K13's :func:`external_oci_cr_version._stack_upgrade`:
-      - Step 1 also reads Chart.yaml.appVersion (K13 reads OCI chart pin).
+    Differs from ``external_oci_cr_version``'s :func:`external_oci_cr_version._stack_upgrade`:
+      - Step 1 also reads Chart.yaml.appVersion (``external_oci_cr_version`` reads OCI chart pin).
       - Step 3 "Already up to date" check is wider — both VALUES_FILE
         version AND Chart.yaml appVersion must match upstream.
-      - Step 6 backs up Chart.yaml + values file (K13: values only).
+      - Step 6 backs up Chart.yaml + values file (``external_oci_cr_version``: values only).
       - Step 7 updates VALUES_FILE.VERSION_KEY + Chart.yaml.appVersion
         + (when ``MIRROR_CHART_VERSION`` truthy) Chart.yaml.version.
     """
@@ -267,7 +267,7 @@ def _stack_upgrade(
             return 1
         print(f"  Latest available:      {latest_version}")
 
-    # "Already up to date" — K12 widens the check: VALUES_FILE.version
+    # "Already up to date" — ``local_cr_version`` widens the check: VALUES_FILE.version
     # must match AND (Chart.yaml.appVersion absent OR matches).
     up_to_date = current_version == latest_version and (
         not current_app_version or current_app_version == latest_version

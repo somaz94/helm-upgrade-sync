@@ -12,12 +12,12 @@ reused via three hook injection points:
   - ``chart_write_hook`` — when ``WRAPPER_CHART_YAML=true``, patches only
     the ``version:`` line of ``Chart.yaml`` and skips ``values.yaml`` +
     ``values.schema.json`` (the component owns its own ``values/<env>.yaml``).
-    Otherwise = K6 baseline.
+    Otherwise = ``external_standard`` baseline.
   - ``helmfile_pin_hook`` — when ``HELMFILE_TRACKED_CHART`` is set,
     scopes the helmfile pin rewrite to the release block whose
     ``chart:`` line contains that substring (multi-release helmfile
     where sibling releases at the same version must stay untouched).
-    Otherwise = K6 baseline via :func:`_common_helmfile.update_helmfile_pins`.
+    Otherwise = ``external_standard`` baseline via :func:`_common_helmfile.update_helmfile_pins`.
 
 Migrated from the canonical bash template at
 ``templates/external-oci.sh``.
@@ -114,14 +114,14 @@ def _write_chart_wrapper_aware(
     latest_app_version: str,
     wrapper_mode: bool,
 ) -> None:
-    """Step 7 chart write override for K9 (external-oci).
+    """Step 7 chart write override for ``external_oci``.
 
     ``wrapper_mode=True`` — local Chart.yaml is component metadata, NOT
     a mirror of the upstream chart. Patch only the ``version:`` line;
     preserve name / description / appVersion / sources. Skip values.yaml
     and values.schema.json (component uses values/<env>.yaml only).
 
-    ``wrapper_mode=False`` — K6 baseline: cp Chart.yaml + values.yaml
+    ``wrapper_mode=False`` — ``external_standard`` baseline: cp Chart.yaml + values.yaml
     + (optional) values.schema.json.
     """
     if wrapper_mode:
@@ -134,7 +134,7 @@ def _write_chart_wrapper_aware(
         )
         return
 
-    # Non-wrapper path = K6 baseline. Reuse the existing helper instead
+    # Non-wrapper path = ``external_standard`` baseline. Reuse the existing helper instead
     # of duplicating the cp + print block.
     _default_chart_write(
         chart_dir=chart_dir,
@@ -215,9 +215,9 @@ def _helmfile_pin_default_or_scoped(
     latest_version: str,
     tracked_chart: str,
 ) -> int:
-    """Step 7 helmfile pin override for K9.
+    """Step 7 helmfile pin override for ``external_oci``.
 
-    ``tracked_chart`` empty → fall back to the K6 baseline (4 sed
+    ``tracked_chart`` empty → fall back to the ``external_standard`` baseline (4 sed
     expressions via :func:`_common_helmfile.update_helmfile_pins`).
     Otherwise scope via :func:`_update_helmfile_pins_tracked_scope`.
     """
@@ -257,7 +257,7 @@ def run(config: dict, argv: list[str], script_path: str | os.PathLike) -> int:
                 f"no tag matched prefix '{tag_prefix}')"
             )
             return "", ""
-        # K9 places the original tag in the "app version" slot purely
+        # ``external_oci`` places the original tag in the "app version" slot purely
         # for the operator log line; the real appVersion is read from
         # the freshly fetched Chart.yaml in Step 3.
         return latest_version_found, latest_tag

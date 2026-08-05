@@ -1,12 +1,12 @@
 """Unit tests for upgrade_core/external_with_image_tag.py.
 
-The K8 module is now a thin extension of :mod:`external_standard`
+The ``external_with_image_tag`` module is now a thin extension of :mod:`external_standard`
 (during the shell -> python migration): the 7-step main flow is reused via
-``post_pin_hook`` and the only K8-specific surface is
-``_rewrite_image_tags`` + the ``run()`` shim. K6's main flow surface is
+``post_pin_hook`` and the only ``external_with_image_tag``-specific surface is
+``_rewrite_image_tags`` + the ``run()`` shim. ``external_standard``'s main flow surface is
 covered by ``test_upgrade_external_standard.py``; here we cover:
 
-  - ``_rewrite_image_tags`` semantics (the K8 delta).
+  - ``_rewrite_image_tags`` semantics (the ``external_with_image_tag`` delta).
   - ``run()`` integration on the image-tag path (mocked subprocess) to
     confirm the hook fires at the correct point inside the apply flow
     and respects ``--dry-run``.
@@ -36,7 +36,7 @@ ei = load("upgrade_core.external_with_image_tag")
 
 
 # =============================================================
-# _rewrite_image_tags — K8 delta vs external-standard
+# _rewrite_image_tags — ``external_with_image_tag`` delta vs external-standard
 # =============================================================
 
 
@@ -149,7 +149,7 @@ class RewriteImageTagsTests(unittest.TestCase):
 
 
 # =============================================================
-# Module wiring — the K8 module must hand its hook to K6's run()
+# Module wiring — the ``external_with_image_tag`` module must hand its hook to ``external_standard``'s run()
 # =============================================================
 
 

@@ -1,8 +1,8 @@
 """Unit tests for upgrade_core/external_oci.py.
 
-The K9 module is a thin extension of :mod:`external_standard` via three
+The ``external_oci`` module is a thin extension of :mod:`external_standard` via three
 hook injection points (during the shell -> python migration). Coverage focuses
-on the K9 deltas:
+on the ``external_oci`` deltas:
 
   - ``_fetch_latest_via_github`` — single-chart vs multi-chart prefix.
   - ``_patch_wrapper_chart_version`` — quote-preserving Chart.yaml patch.
@@ -248,7 +248,7 @@ class RunHookWiringTests(unittest.TestCase):
 
 
 # =============================================================
-# 4 K9 consumer CONFIG spot-check
+# 4 ``external_oci`` consumer CONFIG spot-check
 # =============================================================
 if __name__ == "__main__":
     unittest.main()

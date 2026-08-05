@@ -1,12 +1,12 @@
 """Unit tests for upgrade_core/external_oci_with_mirror.py.
 
-The K10 module wraps K9 (external_oci) with two extra hooks that the
+The ``external_oci_with_mirror`` module wraps ``external_oci`` with two extra hooks that the
 external_standard runner gained during the shell -> python migration:
 
   - ``pre_apply_hook`` drives the Step 7 mirror stage.
   - ``values_summary_hook`` surfaces image.tag overrides at Step 1.
 
-Coverage focuses on the K10 deltas:
+Coverage focuses on the ``external_oci_with_mirror`` deltas:
 
   - ``mirror_image`` — five branches (crane missing / empty upstream
     digest / digest match / copy failure / digest mismatch / success).
@@ -178,7 +178,7 @@ class PreApplyHookFactoryTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(captured["chart_dir"], Path("/tmp/chart"))
         self.assertEqual(captured["latest_version"], "1.0.0")
-        # mirror_image is the K10 module's public helper.
+        # mirror_image is the ``external_oci_with_mirror`` module's public helper.
         self.assertIs(captured["mirror_image"], ewm.mirror_image)
 
     def test_propagates_non_zero_rc(self) -> None:
@@ -240,7 +240,7 @@ class RunIntegrationTests(unittest.TestCase):
     def test_help_short_circuits(self) -> None:
         """--help short-circuits before any external command runs.
 
-        Also verifies the K10 module forwards argv correctly into the
+        Also verifies the ``external_oci_with_mirror`` module forwards argv correctly into the
         external_standard arg parser.
         """
         cfg = self._consumer_config()
@@ -268,7 +268,7 @@ class RunIntegrationTests(unittest.TestCase):
         # values_summary_hook is None (default Step 1 dump).
         self.assertIsNone(called["pre_apply_hook"])
         self.assertIsNone(called["values_summary_hook"])
-        # K9 inherits: fetch / chart_write / helmfile_pin are always set.
+        # ``external_oci`` inherits: fetch / chart_write / helmfile_pin are always set.
         self.assertIsNotNone(called["fetch_latest_hook"])
         self.assertIsNotNone(called["chart_write_hook"])
         self.assertIsNotNone(called["helmfile_pin_hook"])

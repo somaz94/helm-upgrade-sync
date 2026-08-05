@@ -3,10 +3,10 @@
 ``local_cr_version`` is an **independent** module — sister of
 ``external_oci_cr_version``
 (``external_oci_cr_version``). Shared CR helpers live in
-:mod:`upgrade_core._common_cr`. K12-specific helpers covered here:
+:mod:`upgrade_core._common_cr`. ``local_cr_version``-specific helpers covered here:
 
   - ``_read_chart_field`` — Chart.yaml top-level scalar reader.
-  - ``_list_backups`` — K12 simpler form (Chart.yaml appVersion label).
+  - ``_list_backups`` — ``local_cr_version`` simpler form (Chart.yaml appVersion label).
   - ``_do_rollback`` — Chart.yaml + values restore (no chart-pin branch).
   - ``_stack_upgrade`` — 7-step main flow with Chart.yaml appVersion
     + optional ``MIRROR_CHART_VERSION`` mirror.
@@ -100,7 +100,7 @@ class ListBackupsTests(unittest.TestCase):
 
 
 class ParseArgvTests(unittest.TestCase):
-    _CFG = {"SCRIPT_NAME": "Test K12", "VALUES_FILE": "values/dev.yaml"}
+    _CFG = {"SCRIPT_NAME": "Test local-cr-version", "VALUES_FILE": "values/dev.yaml"}
 
     def test_default_is_stack(self) -> None:
         mode, *_ = lcv._parse_argv([], self._CFG, 5)
@@ -125,7 +125,7 @@ class ParseArgvTests(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     def test_chart_pin_subcommands_unknown(self) -> None:
-        """K12 has no chart-pin sub-flow; --check-chart should be unknown."""
+        """``local_cr_version`` has no chart-pin sub-flow; --check-chart should be unknown."""
         with redirect_stdout(io.StringIO()):
             _, _, _, rc = lcv._parse_argv(["--check-chart"], self._CFG, 5)
         self.assertEqual(rc, 1)
@@ -164,7 +164,7 @@ class StackUpgradeApplyTests(unittest.TestCase):
             "releases:\n  - name: foo\n    namespace: ns\n    chart: .\n"
         )
         config = {
-            "SCRIPT_NAME": "Test K12",
+            "SCRIPT_NAME": "Test local-cr-version",
             "COMPONENT_LABEL": "foo",
             "VERSION_SOURCE": "elastic-artifacts",
             "VERSION_SOURCE_ARG": "",
@@ -270,7 +270,7 @@ class StackUpgradeApplyTests(unittest.TestCase):
 class RunIntegrationTests(unittest.TestCase):
     def _config(self) -> dict:
         return {
-            "SCRIPT_NAME": "Test K12",
+            "SCRIPT_NAME": "Test local-cr-version",
             "COMPONENT_LABEL": "foo",
             "VERSION_SOURCE": "elastic-artifacts",
             "VERSION_SOURCE_ARG": "",
@@ -310,7 +310,7 @@ class RunIntegrationTests(unittest.TestCase):
             with redirect_stdout(buf):
                 rc = lcv.run(self._config(), ["--help"], script_path=str(script_path))
             self.assertEqual(rc, 0)
-            self.assertIn("Test K12", buf.getvalue())
+            self.assertIn("Test local-cr-version", buf.getvalue())
 
 
 if __name__ == "__main__":

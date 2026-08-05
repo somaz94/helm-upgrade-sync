@@ -40,9 +40,9 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-# Re-exported for backward compatibility with K12 / K13 import sites.
+# Re-exported for backward compatibility with ``local_cr_version`` / ``external_oci_cr_version`` import sites.
 # The helpers were moved to ``_common`` in Phase 3 so non-CR templates
-# (K7 ansible_github_release) could drop their near-identical copies
+# (``ansible_github_release``) could drop their near-identical copies
 # without taking a CR-domain dependency.
 from ._common import read_yaml_value, update_yaml_value  # noqa: F401
 
@@ -238,7 +238,7 @@ def kubectl_jsonpath(ns: str, kind: str, name: str, path: str) -> str:
 def read_helmfile_namespace(helmfile_path: Path | None) -> str:
     """Read the first ``namespace:`` value from a helmfile.
 
-    Used by both K12 and K13 CR helpers. Looks for an indented
+    Used by both ``local_cr_version`` and ``external_oci_cr_version`` CR helpers. Looks for an indented
     ``namespace:`` (release-level) — the bash original used
     ``awk '/namespace:/ {print $2; exit}'`` which is more lenient but
     we tighten to the indented form here to skip any mid-line match
@@ -253,7 +253,7 @@ def read_helmfile_namespace(helmfile_path: Path | None) -> str:
     return ""
 
 
-# Alias kept for clarity in K12/K13 call sites that read this as "the
+# Alias kept for clarity in the CR templates call sites that read this as "the
 # release namespace from helmfile."
 get_release_namespace = read_helmfile_namespace
 
@@ -557,7 +557,7 @@ def verify_image_exists(container_image: str, tag: str) -> bool:
 
 
 # =============================================================
-# Step 4 (image verify + fallback) — shared by K12 / K13
+# Step 4 (image verify + fallback) — shared by ``local_cr_version`` / ``external_oci_cr_version``
 # =============================================================
 
 @dataclass(frozen=True)
@@ -596,8 +596,8 @@ def verify_image_with_fallback(
     GA version that has a published image when the requested tag is
     missing.
 
-    Extracted from the byte-for-byte identical Step 4 blocks in K12
-    (``local_cr_version``) and K13 (``external_oci_cr_version``). Output
+    Extracted from the byte-for-byte identical Step 4 blocks in ``local_cr_version``
+    (``local_cr_version``) and ``external_oci_cr_version``. Output
     (stdout) is preserved verbatim.
     """
     print()
@@ -681,7 +681,7 @@ def rollback_with_webhook_handling(
       7. Wait for the CR to reach phase=Ready.
 
     Reads the operator + webhook + chart dir from ``config`` so the
-    same helper drives both K12 and K13 rollback paths.
+    same helper drives both ``local_cr_version`` and ``external_oci_cr_version`` rollback paths.
     """
     release_name, release_ns = read_helmfile_release_metadata(helmfile_path)
     operator_ns = config["CR_OPERATOR_NS"]
@@ -788,7 +788,7 @@ def handle_downgrade_rollback(
     """Print the CR downgrade warning + offer auto-webhook rollback + emit
     the 7-step manual instructions when auto is declined or config-incomplete.
 
-    Shared by K12 (``local_cr_version``) and K13 (``external_oci_cr_version``)
+    Shared by ``local_cr_version`` and ``external_oci_cr_version``
     — both consumers print the identical block aside from the step-5 chart
     directory placeholder (``operator-dir`` vs ``eck-operator-dir``).
 

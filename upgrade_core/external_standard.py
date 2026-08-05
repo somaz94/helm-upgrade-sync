@@ -13,12 +13,12 @@ chart-flavored list / rollback) were extracted to
 specific steps without forking the body:
 
   - ``fetch_latest_hook`` replaces Step 2's "helm search repo + parse"
-    (used by K9 external-oci which queries GitHub Releases instead).
+    (used by ``external_oci`` external-oci which queries GitHub Releases instead).
   - ``chart_write_hook`` replaces Step 7's "cp Chart.yaml + values.yaml
-    + values.schema.json" (used by K9 wrapper-mode which patches only
+    + values.schema.json" (used by ``external_oci`` wrapper-mode which patches only
     the ``version:`` line).
   - ``helmfile_pin_hook`` replaces the default
-    :func:`_common_helmfile.update_helmfile_pins` call (used by K9
+    :func:`_common_helmfile.update_helmfile_pins` call (used by ``external_oci``
     tracked-chart scope which limits the rewrite to one release block).
   - ``post_pin_hook`` still fires after the pin
     rewrite for image-tag-style follow-up steps.
@@ -28,12 +28,12 @@ added so the external-oci-with-mirror variant fits the same body:
 
   - ``values_summary_hook`` runs after the Step 1 helmfile releases
     print and surfaces per-values-file image.tag overrides. None falls
-    back to the K10 default (yq-based ``.image.tag`` per file).
+    back to the ``external_oci_with_mirror`` default (yq-based ``.image.tag`` per file).
   - ``pre_apply_hook`` runs as Step 7 (numbered ``[Step 7/total]``) and
     is reserved for pre-apply side effects like mirroring upstream
     images to a private registry. Non-zero return aborts the upgrade.
     Skipped in dry-run with a SKIPPED message.
-  - ``total_steps`` defaults to 7; K10 passes 8 so the "Apply" step
+  - ``total_steps`` defaults to 7; ``external_oci_with_mirror`` passes 8 so the "Apply" step
     moves to ``[Step 8/8]`` and the diagnostic header prints match
     byte-for-byte with the legacy bash template.
 
@@ -78,7 +78,7 @@ from ._common_helmfile import (
 
 # Hook signatures for templates that extend the base flow without
 # forking the whole body. All hooks accept keyword-only arguments and
-# default to ``None`` so K6/K8 behavior is preserved when no override
+# default to ``None`` so ``external_standard`` / ``external_with_image_tag`` behavior is preserved when no override
 # is supplied.
 
 # Step 2 — fetch latest version. Default = helm search repo + parse JSON.
@@ -106,10 +106,10 @@ HelmfilePinHook = Callable[..., int]
 PostPinHook = Callable[..., None]
 
 # Step 1 — surface per-values-file overrides after the helmfile releases
-# block. Default = K10's yq-based ``.image.tag`` per ``values/*.yaml``.
+# block. Default = ``external_oci_with_mirror``'s yq-based ``.image.tag`` per ``values/*.yaml``.
 ValuesSummaryHook = Callable[..., None]
 
-# Step 7 (K10) — pre-apply hook (e.g. mirror upstream images to a private
+# Step 7 (``external_oci_with_mirror``) — pre-apply hook (e.g. mirror upstream images to a private
 # registry). Returns 0 to continue with the Apply step, non-zero to abort
 # the upgrade. Skipped in dry-run by the caller (hook does not see
 # ``dry_run`` — the SKIPPED message is the caller's responsibility).
@@ -161,8 +161,8 @@ def run(
         presence and the helmfile pin path is skipped; ``None`` keeps the
         helmfile pin behavior unchanged.
 
-    ``total_steps`` defaults to 7 to preserve K6/K7/K8/K9 byte-for-byte
-    output. K10 passes 8 so the Apply step renumbers to ``[Step 8/8]``.
+    ``total_steps`` defaults to 7 to preserve the four baseline templates byte-for-byte
+    output. ``external_oci_with_mirror`` passes 8 so the Apply step renumbers to ``[Step 8/8]``.
     """
 
     script = Path(script_path).resolve()
@@ -366,9 +366,9 @@ def _main_flow(
         print(f"  Helmfile releases ({helmfile_name}):")
         _print_helmfile_releases(helmfile_path)
 
-    # Step 1 hook — values summary (K10: surface image.tag overrides per
-    # values/*.yaml). Default = K10's yq-based per-file dump. Templates
-    # that do not expose Step 1 overrides (K6/K7/K8/K9) leave this None
+    # Step 1 hook — values summary (``external_oci_with_mirror``: surface image.tag overrides per
+    # values/*.yaml). Default = ``external_oci_with_mirror``'s yq-based per-file dump. Templates
+    # that do not expose Step 1 overrides (the four baseline templates) leave this None
     # and the block is skipped entirely.
     if values_summary_hook is not None or total_steps >= 8:
         print()
@@ -444,14 +444,14 @@ def _main_flow(
 
 
 # -----------------------------------------------
-# Default Step 1 — values summary (K10 baseline)
+# Default Step 1 — values summary (``external_oci_with_mirror`` baseline)
 # -----------------------------------------------
 
 def _default_values_summary(*, values_dir: Path) -> None:
-    """K10 baseline: print ``.image.tag`` for each ``values/*.yaml`` via yq.
+    """``external_oci_with_mirror`` baseline: print ``.image.tag`` for each ``values/*.yaml`` via yq.
 
     yq missing → graceful install hint. No ``values/*.yaml`` → graceful
-    message. Mirrors the K10 bash default byte-for-byte so consumers can
+    message. Mirrors the ``external_oci_with_mirror`` bash default byte-for-byte so consumers can
     omit the hook when the per-file ``image.tag`` view is enough.
     """
     if not values_dir.is_dir():
@@ -668,14 +668,14 @@ def _apply_upgrade(
     # precedes the Step 7 / dry-run branch in every template).
     print()
 
-    # K10 mirror stage = Step 7 of 8. Skipped entirely when
-    # total_steps==7 (K6/K7/K8/K9 baseline).
+    # ``external_oci_with_mirror`` mirror stage = Step 7 of 8. Skipped entirely when
+    # total_steps==7 (the four baseline templates baseline).
     if total_steps >= 8:
         if dry_run:
             print(f"[Step 7/{total_steps}] Mirror stage SKIPPED in dry-run.")
             print()
         else:
-            # K10 bash inserts another blank line before the mirror header
+            # ``external_oci_with_mirror`` bash inserts another blank line before the mirror header
             # regardless of whether do_mirror is defined.
             print()
             if pre_apply_hook is not None:
@@ -705,7 +705,7 @@ def _apply_upgrade(
                 )
 
     # Final step = Apply (or DRY-RUN exit). ``apply_step`` is the final
-    # step number (7 for K6/K7/K8/K9, 8 for K10).
+    # step number (7 for the four baseline templates, 8 for ``external_oci_with_mirror``).
     apply_step = total_steps
     if dry_run:
         print(
@@ -749,7 +749,7 @@ def _apply_upgrade(
     for entry in sorted(backup_target.iterdir()):
         print(f"    - {entry.name}")
 
-    # Chart + values + schema write (overridable for K9 wrapper-mode).
+    # Chart + values + schema write (overridable for ``external_oci`` wrapper-mode).
     if chart_write_hook is not None:
         chart_write_hook(
             chart_dir=chart_dir,
@@ -767,7 +767,7 @@ def _apply_upgrade(
             latest_app_version=latest_app_version,
         )
 
-    # Version pin rewrite. The default target is the helmfile (with the K9
+    # Version pin rewrite. The default target is the helmfile (with the ``external_oci``
     # tracked-chart scope override); the argocd-pin template passes
     # ``pin_write_hook`` to redirect the pin into the ArgoCD metadata
     # file(s) instead. That hook fires regardless of helmfile presence,

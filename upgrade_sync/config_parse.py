@@ -85,7 +85,7 @@ _CONFIG_LINE = re.compile(r'^([A-Z_][A-Z0-9_]*)=(.*)$')
 
 # CONFIG-line shape for Python dict templates: ``"KEY": "VALUE",`` (with
 # optional whitespace + trailing comma + trailing ``# comment``). Used
-# by K6+ canonical templates (``*.py``) which carry CONFIG as a Python
+# by Python canonical templates (``*.py``) which carry CONFIG as a Python
 # dict literal instead of bash variable assignments. Trailing comma and
 # surrounding quotes are stripped in ``_clean_value()``.
 _CONFIG_LINE_PY = re.compile(r'^\s*"([A-Z_][A-Z0-9_]*)"\s*:\s*(.*?)\s*,?\s*$')
@@ -129,7 +129,7 @@ def parse_config_block(upgrade_script: Path) -> ConfigVars:
     the scalar assignments into a :class:`ConfigVars` instance.
 
     Handles both bash (``KEY="VALUE"``) and Python dict
-    (``"KEY": "VALUE",``) line shapes — the K6+ canonical templates
+    (``"KEY": "VALUE",``) line shapes — the Python canonical templates
     switched from ``.sh`` to ``.py`` over that migration, so the
     CONFIG block now comes in two flavors. Bash form is tried first; on
     miss the Python dict form is tried. Unknown keys are silently

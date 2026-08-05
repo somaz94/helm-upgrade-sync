@@ -22,11 +22,11 @@
 #   - docker-hub-tags   : Docker Hub tags API for a given namespace/repository.
 #
 # Difference vs "external-oci-cr-version":
-#   - K12 owns Chart.yaml (local metadata mirror); K13 does not.
-#   - K12 has the MIRROR_CHART_VERSION option; K13 does not.
-#   - K12 backup contains Chart.yaml + values file; K13 = values only.
-#   - K12 has NO OCI chart-pin sub-flow (--check-chart / --upgrade-chart);
-#     K13 does because it consumes an external OCI chart.
+#   - ``local_cr_version`` owns Chart.yaml (local metadata mirror); ``external_oci_cr_version`` does not.
+#   - ``local_cr_version`` has the MIRROR_CHART_VERSION option; ``external_oci_cr_version`` does not.
+#   - ``local_cr_version`` backup contains Chart.yaml + values file; ``external_oci_cr_version`` = values only.
+#   - ``local_cr_version`` has NO OCI chart-pin sub-flow (--check-chart / --upgrade-chart);
+#     ``external_oci_cr_version`` does because it consumes an external OCI chart.
 #
 # Real per-chart upgrade.py files are kept in sync via:
 #   sync.py --apply

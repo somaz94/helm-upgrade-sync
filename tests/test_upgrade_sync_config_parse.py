@@ -90,9 +90,9 @@ class TestParseConfigBlock(unittest.TestCase):
         self.assertEqual(cfg.values_file, "")
 
     # the shell -> python migration migrated canonical templates from ``.sh``
-    # to ``.py`` — the CONFIG block now comes in Python dict form. K12
+    # to ``.py`` — the CONFIG block now comes in Python dict form. ``local_cr_version``
     # wired ``parse_config_block`` to handle both shapes so check-versions.py
-    # keeps working across the mixed-mode period and post-K12.
+    # keeps working across the mixed-mode period and after the migration.
     PY_FIXTURE = FIXTURES_DIR / "check-versions-upgrade-with-fences.py"
 
     def test_python_dict_extracts_known_keys(self) -> None:

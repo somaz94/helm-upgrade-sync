@@ -134,7 +134,7 @@ def run(config: dict, argv: list[str], script_path: str | os.PathLike) -> int:
 
 
 # -----------------------------------------------
-# Argument parsing (8 CLI flags — K6 baseline + --list-backups uses
+# Argument parsing (8 CLI flags — ``external_standard`` baseline + --list-backups uses
 # local backup format with template/value counts)
 # -----------------------------------------------
 
@@ -229,7 +229,7 @@ Examples:
 # -----------------------------------------------
 # list_backups / do_rollback — local-specific (template/value counts +
 # templates/ + EXTRA_DIRS restore). External_standard's helpers cannot
-# be reused here because the K11 backup tree includes additional dirs.
+# be reused here because the ``local_with_templates`` backup tree includes additional dirs.
 # -----------------------------------------------
 
 def _list_backups(backup_dir: Path) -> None:
@@ -762,7 +762,7 @@ def _apply_upgrade(
             print(f"  {line}")
         print("  ------------------------------------------------")
 
-    # Step 7 — breaking changes scan (same as K6 Step 6 logic, but the
+    # Step 7 — breaking changes scan (same as ``external_standard`` Step 6 logic, but the
     # baseline comparison uses local values.yaml vs upstream values.yaml).
     print()
     print(
@@ -850,7 +850,7 @@ def _apply_upgrade(
         if src.is_dir():
             shutil.copytree(src, backup_target / edir, dirs_exist_ok=True)
 
-    # Backup custom values (matches K6: skip Chart/values/helmfile names).
+    # Backup custom values (matches ``external_standard``: skip Chart/values/helmfile names).
     if values_dir.is_dir():
         for values_file in sorted(values_dir.glob("*.yaml")):
             if not values_file.is_file():
