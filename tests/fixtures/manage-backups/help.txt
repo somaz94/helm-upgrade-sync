@@ -1,0 +1,24 @@
+Usage: manage-backups.py <command> [options]
+
+Manage backup directories created by upgrade.py scripts across all charts.
+
+Commands:
+  --list                    List backups per chart (count, size, oldest, newest).
+  --total-size              Show total disk usage of all backup/ directories.
+  --cleanup [--keep N]      Keep last N backups per chart (default 5).
+  --purge                   Remove ALL backups (requires confirmation).
+  -h, --help                Show this help.
+
+Options:
+  --repo-root <dir>         Repository to operate on. Defaults to the embedded
+                            repo when installed at <repo>/scripts/upgrade-sync/,
+                            otherwise $UPGRADE_SYNC_REPO_ROOT, otherwise the git
+                            root of the current directory.
+
+Examples:
+  manage-backups.py --list
+  manage-backups.py --cleanup --keep 1        # keep only the latest backup
+  manage-backups.py --cleanup --keep 3
+  manage-backups.py --purge                    # remove everything (destructive)
+  manage-backups.py --total-size
+rc=0

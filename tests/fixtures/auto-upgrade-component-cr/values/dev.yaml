@@ -1,0 +1,6 @@
+# Component fixture — CR values, holds the primary image version.
+version: 8.15.0
+fullnameOverride: elasticsearch
+nodeSets:
+  - name: default
+    count: 1

@@ -1,0 +1,8 @@
+# Component fixture — CR template variant, chart helm pin in helmfile.yaml.
+releases:
+  - name: elasticsearch
+    namespace: observability
+    chart: eck-elasticsearch
+    version: 0.16.0
+    values:
+      - values/dev.yaml

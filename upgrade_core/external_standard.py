@@ -1,0 +1,827 @@
+"""External Helm chart upgrade runner (external-standard template).
+
+Drives the upgrade flow shared by external Helm charts that use a helm repo
++ helmfile layout. Migrated from the canonical bash template at
+``scripts/upgrade-sync/templates/external-standard.sh`` as part of the
+the shell -> python migration shell -> python migration.
+
+In the shell -> python migration the helmfile-flavored helpers (Chart.yaml /
+helmfile.yaml parsing, subprocess wrappers, helmfile pin rewrite,
+chart-flavored list / rollback) were extracted to
+:mod:`_common_helmfile`, and three extension points were added to
+:func:`run` so OCI / wrapper / tracked-chart variants can override
+specific steps without forking the body:
+
+  - ``fetch_latest_hook`` replaces Step 2's "helm search repo + parse"
+    (used by K9 external-oci which queries GitHub Releases instead).
+  - ``chart_write_hook`` replaces Step 7's "cp Chart.yaml + values.yaml
+    + values.schema.json" (used by K9 wrapper-mode which patches only
+    the ``version:`` line).
+  - ``helmfile_pin_hook`` replaces the default
+    :func:`_common_helmfile.update_helmfile_pins` call (used by K9
+    tracked-chart scope which limits the rewrite to one release block).
+  - ``post_pin_hook`` (introduced in the shell -> python migration) still fires after the pin
+    rewrite for image-tag-style follow-up steps.
+
+In the shell -> python migration two more hooks plus ``total_steps`` were
+added so the external-oci-with-mirror variant fits the same body:
+
+  - ``values_summary_hook`` runs after the Step 1 helmfile releases
+    print and surfaces per-values-file image.tag overrides. None falls
+    back to the K10 default (yq-based ``.image.tag`` per file).
+  - ``pre_apply_hook`` runs as Step 7 (numbered ``[Step 7/total]``) and
+    is reserved for pre-apply side effects like mirroring upstream
+    images to a private registry. Non-zero return aborts the upgrade.
+    Skipped in dry-run with a SKIPPED message.
+  - ``total_steps`` defaults to 7; K10 passes 8 so the "Apply" step
+    moves to ``[Step 8/8]`` and the diagnostic header prints match
+    byte-for-byte with the legacy bash template.
+
+Public entry-point: ``run(config, argv, script_path, *, hooks...)``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Callable
+
+from ._common import (
+    DOUBLE_SEP,
+    SEPARATOR,
+    auto_prune_backups as _auto_prune_backups,
+    cleanup_backups as _cleanup_backups,
+    is_excluded as _is_excluded,
+    now_timestamp,
+    read_keep_backups_env,
+    sorted_backups as _sorted_backups,
+)
+from ._common_helmfile import (
+    detect_helmfile as _detect_helmfile,
+    diff as _diff,
+    do_rollback as _do_rollback,
+    extract_top_keys as _extract_top_keys,
+    helm as _helm,
+    list_backups as _list_backups,
+    print_helmfile_releases as _print_helmfile_releases,
+    read_yaml_field as _read_yaml_field,
+    run_subprocess as _run,
+    update_helmfile_pins as _update_helmfile_pins,
+    used_top_level_keys as _used_top_level_keys,
+)
+
+
+# Hook signatures for templates that extend the base flow without
+# forking the whole body. All hooks accept keyword-only arguments and
+# default to ``None`` so K6/K8 behavior is preserved when no override
+# is supplied.
+
+# Step 2 — fetch latest version. Default = helm search repo + parse JSON.
+# Returns ``(latest_version_found, latest_app_version_from_helm_search)``.
+# ``latest_app_version`` from this hook is only used for display
+# purposes during the "Latest available" / "Latest" header lines; the
+# canonical appVersion read happens later from the freshly fetched
+# Chart.yaml in Step 3.
+FetchLatestHook = Callable[..., tuple[str, str]]
+
+# Step 7 — write Chart.yaml + values.yaml + values.schema.json. Default
+# behavior is a straight `cp` of the temp tree onto the chart dir.
+# Hook returns the formatted print lines for the operator log (one per
+# line of stdout). Hook MUST print its own messages — the default also
+# prints, so the caller doesn't double-print.
+ChartWriteHook = Callable[..., None]
+
+# Step 7 — rewrite helmfile pin(s). Default = update_helmfile_pins (4
+# sed expressions). Hook returns the count of updated pins (used in the
+# log line).
+HelmfilePinHook = Callable[..., int]
+
+# Step 7 — post-pin extension (e.g. image-tag rewrite). Fires after the
+# helmfile pin rewrite and before auto-prune. Same kwargs as the shell -> python migration.
+PostPinHook = Callable[..., None]
+
+# Step 1 — surface per-values-file overrides after the helmfile releases
+# block. Default = K10's yq-based ``.image.tag`` per ``values/*.yaml``.
+ValuesSummaryHook = Callable[..., None]
+
+# Step 7 (K10) — pre-apply hook (e.g. mirror upstream images to a private
+# registry). Returns 0 to continue with the Apply step, non-zero to abort
+# the upgrade. Skipped in dry-run by the caller (hook does not see
+# ``dry_run`` — the SKIPPED message is the caller's responsibility).
+PreApplyHook = Callable[..., int]
+
+# Apply step — version pin rewrite that REPLACES the helmfile pin step and
+# fires regardless of helmfile presence. Used by the ``argocd-pin`` template
+# (Phase 5 / argocd-pin) to write ``chart.version`` into
+# ``<component>/argocd/<release>.yaml`` — the migrated components no longer
+# ship a helmfile, so the default ``helmfile_path is not None`` pin path
+# never runs. Receives ``(chart_dir, current_version, latest_version)`` and
+# returns the count of pins/files rewritten. Default ``None`` preserves the
+# helmfile pin path byte-for-byte for every non-migrated component.
+PinWriteHook = Callable[..., int]
+
+
+def run(
+    config: dict,
+    argv: list[str],
+    script_path: str | os.PathLike,
+    *,
+    total_steps: int = 7,
+    fetch_latest_hook: FetchLatestHook | None = None,
+    chart_write_hook: ChartWriteHook | None = None,
+    helmfile_pin_hook: HelmfilePinHook | None = None,
+    post_pin_hook: PostPinHook | None = None,
+    values_summary_hook: ValuesSummaryHook | None = None,
+    pre_apply_hook: PreApplyHook | None = None,
+    pin_write_hook: PinWriteHook | None = None,
+) -> int:
+    """Entry-point invoked by each consumer ``upgrade.py``.
+
+    Returns the process exit code (0 success, non-zero failure).
+
+    Hook semantics — all default to ``None`` (use baseline behavior):
+      - ``fetch_latest_hook`` — replaces Step 2.
+      - ``chart_write_hook`` — replaces Step 7 (or Step 8 when
+        ``total_steps=8``) chart write block.
+      - ``helmfile_pin_hook`` — replaces helmfile pin rewrite.
+      - ``post_pin_hook`` — runs after the pin rewrite (the shell -> python migration pattern).
+      - ``values_summary_hook`` — runs after the Step 1 helmfile releases
+        list (the shell -> python migration pattern). ``None`` falls back to a K10 default that
+        prints ``image.tag`` per ``values/*.yaml`` via yq.
+      - ``pre_apply_hook`` — runs as a numbered step between the breaking-
+        changes scan and the Apply step (the shell -> python migration pattern). Used only when
+        ``total_steps=8``; ignored for ``total_steps=7``.
+      - ``pin_write_hook`` — replaces the version pin write (argocd-pin
+        pattern). When supplied it fires on apply regardless of helmfile
+        presence and the helmfile pin path is skipped; ``None`` keeps the
+        helmfile pin behavior unchanged.
+
+    ``total_steps`` defaults to 7 to preserve K6/K7/K8/K9 byte-for-byte
+    output. K10 passes 8 so the Apply step renumbers to ``[Step 8/8]``.
+    """
+
+    script = Path(script_path).resolve()
+    chart_dir = script.parent
+    backup_dir = chart_dir / "backup"
+    values_dir = chart_dir / "values"
+    timestamp = now_timestamp()
+    keep_backups = read_keep_backups_env()
+
+    helmfile_path, helmfile_name = _detect_helmfile(chart_dir)
+    prog = script.name
+
+    args = _parse_args(argv, prog, keep_backups, backup_dir, chart_dir, values_dir)
+    if args is None:
+        return 0
+
+    return _main_flow(
+        config=config,
+        chart_dir=chart_dir,
+        backup_dir=backup_dir,
+        values_dir=values_dir,
+        timestamp=timestamp,
+        keep_backups=keep_backups,
+        helmfile_path=helmfile_path,
+        helmfile_name=helmfile_name,
+        dry_run=args["dry_run"],
+        target_version=args["target_version"],
+        exclude_patterns=args["exclude_patterns"],
+        total_steps=total_steps,
+        fetch_latest_hook=fetch_latest_hook,
+        chart_write_hook=chart_write_hook,
+        helmfile_pin_hook=helmfile_pin_hook,
+        post_pin_hook=post_pin_hook,
+        values_summary_hook=values_summary_hook,
+        pre_apply_hook=pre_apply_hook,
+        pin_write_hook=pin_write_hook,
+    )
+
+
+# -----------------------------------------------
+# Argument parsing (manual — preserves bash byte-for-byte messages)
+# -----------------------------------------------
+
+def _parse_args(
+    argv: list[str],
+    prog: str,
+    keep_backups: int,
+    backup_dir: Path,
+    chart_dir: Path,
+    values_dir: Path,
+) -> dict | None:
+    """Parse CLI args. Returns dict for the main flow, or None for sub-commands."""
+
+    dry_run = False
+    target_version = ""
+    exclude_patterns = ""
+
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            _usage(prog, keep_backups)
+            sys.exit(0)
+        elif arg == "--list-backups":
+            _list_backups(backup_dir)
+            sys.exit(0)
+        elif arg == "--rollback":
+            _do_rollback(backup_dir, chart_dir, values_dir)
+            sys.exit(0)
+        elif arg == "--cleanup-backups":
+            _cleanup_backups(backup_dir, keep_backups)
+            sys.exit(0)
+        elif arg == "--dry-run":
+            dry_run = True
+            i += 1
+        elif arg == "--exclude":
+            exclude_patterns = argv[i + 1] if i + 1 < len(argv) else ""
+            if not exclude_patterns:
+                print("ERROR: --exclude requires a pattern (e.g., --exclude old-release,test)")
+                sys.exit(1)
+            i += 2
+        elif arg == "--version":
+            target_version = argv[i + 1] if i + 1 < len(argv) else ""
+            if not target_version:
+                print("ERROR: --version requires a version number")
+                sys.exit(1)
+            i += 2
+        else:
+            print(f"Unknown option: {arg}")
+            print()
+            _usage(prog, keep_backups)
+            sys.exit(0)
+
+    return {
+        "dry_run": dry_run,
+        "target_version": target_version,
+        "exclude_patterns": exclude_patterns,
+    }
+
+
+def _usage(prog: str, keep_backups: int) -> None:
+    print(f"""Usage: {prog} [COMMAND] [OPTIONS]
+
+Checks for new versions, backs up current files, and applies the upgrade.
+
+Commands:
+  (default)           Check latest version and upgrade
+  --version <VER>     Upgrade to a specific chart version
+  --exclude <PATTERN> Exclude values files whose name contains PATTERN (substring match,
+                      comma-separated; also skipped from backup copy)
+  --dry-run           Preview changes only (no files will be modified)
+  --rollback          Restore from a previous backup
+  --list-backups      List available backups
+  --cleanup-backups   Keep only the last {keep_backups} backups, remove older ones
+  -h, --help          Show this help message
+
+Examples:
+  {prog}                                # Upgrade to latest
+  {prog} --dry-run                      # Preview upgrade without changes
+  {prog} --version 1.0.0                # Upgrade to specific version
+  {prog} --exclude old-release,test     # Skip files with 'old-release' or 'test' in name
+  {prog} --dry-run --version 1.0.0      # Combine flags
+  {prog} --rollback                     # Restore from backup
+  {prog} --list-backups                 # Show available backups
+  {prog} --cleanup-backups              # Remove old backups (keep last {keep_backups})""")
+
+
+# -----------------------------------------------
+# Default Step 2 — helm search repo + parse JSON
+# -----------------------------------------------
+
+def _default_fetch_latest(*, config: dict) -> tuple[str, str]:
+    """Baseline Step 2 for external-standard / external-with-image-tag.
+
+    Returns (latest_version_found, latest_app_version). Empty strings
+    when the search returns nothing or fails — caller emits the bash
+    error message.
+    """
+    _helm("repo", "add", config["HELM_REPO_NAME"], config["HELM_REPO_URL"])
+    _helm("repo", "update")
+
+    search = _helm("search", "repo", config["HELM_CHART"], "--output", "json")
+    try:
+        data = json.loads(search.stdout or "[]")
+        if isinstance(data, list) and data:
+            return (
+                data[0].get("version", "") or "",
+                data[0].get("app_version", "") or "",
+            )
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return "", ""
+
+
+# -----------------------------------------------
+# Main 7-step flow
+# -----------------------------------------------
+
+def _main_flow(
+    *,
+    config: dict,
+    chart_dir: Path,
+    backup_dir: Path,
+    values_dir: Path,
+    timestamp: str,
+    keep_backups: int,
+    helmfile_path: Path | None,
+    helmfile_name: str,
+    dry_run: bool,
+    target_version: str,
+    exclude_patterns: str,
+    total_steps: int = 7,
+    fetch_latest_hook: FetchLatestHook | None = None,
+    chart_write_hook: ChartWriteHook | None = None,
+    helmfile_pin_hook: HelmfilePinHook | None = None,
+    post_pin_hook: PostPinHook | None = None,
+    values_summary_hook: ValuesSummaryHook | None = None,
+    pre_apply_hook: PreApplyHook | None = None,
+    pin_write_hook: PinWriteHook | None = None,
+) -> int:
+    print(DOUBLE_SEP)
+    print(f" {config['SCRIPT_NAME']}")
+    if dry_run:
+        print(" Mode: DRY-RUN (no files will be changed)")
+    if target_version:
+        print(f" Target: v{target_version}")
+    if exclude_patterns:
+        print(f" Exclude: {exclude_patterns}")
+    print(DOUBLE_SEP)
+
+    # Step 1
+    print()
+    print(f"[Step 1/{total_steps}] Checking current version...")
+    chart_yaml = chart_dir / "Chart.yaml"
+    current_version = _read_yaml_field(chart_yaml, "version")
+    current_app_version = _read_yaml_field(chart_yaml, "appVersion")
+    print(f"  Installed - Chart: {current_version} / App: {current_app_version}")
+
+    if helmfile_path is not None:
+        print()
+        print(f"  Helmfile releases ({helmfile_name}):")
+        _print_helmfile_releases(helmfile_path)
+
+    # Step 1 hook — values summary (K10: surface image.tag overrides per
+    # values/*.yaml). Default = K10's yq-based per-file dump. Templates
+    # that do not expose Step 1 overrides (K6/K7/K8/K9) leave this None
+    # and the block is skipped entirely.
+    if values_summary_hook is not None or total_steps >= 8:
+        print()
+        print("  Values image overrides:")
+        if values_summary_hook is not None:
+            values_summary_hook(values_dir=values_dir)
+        else:
+            _default_values_summary(values_dir=values_dir)
+
+    # Step 2
+    print()
+    print(f"[Step 2/{total_steps}] Checking latest version...")
+    if fetch_latest_hook is not None:
+        latest_version_found, latest_app_version = fetch_latest_hook(config=config)
+    else:
+        latest_version_found, latest_app_version = _default_fetch_latest(config=config)
+
+    if not latest_version_found:
+        print("  ERROR: Failed to fetch latest version.")
+        print(
+            f"  Try: helm repo add {config['HELM_REPO_NAME']} "
+            f"{config['HELM_REPO_URL']} && helm repo update"
+        )
+        return 1
+
+    if target_version:
+        print(
+            f"  Latest available - Chart: {latest_version_found} / "
+            f"App: {latest_app_version}"
+        )
+        latest_version = target_version
+        print(f"  Using target     - Chart: {target_version}")
+    else:
+        latest_version = latest_version_found
+        print(
+            f"  Latest    - Chart: {latest_version} / App: {latest_app_version}"
+        )
+
+    if current_version == latest_version:
+        print()
+        print("  Already up to date! Nothing to do.")
+        return 0
+
+    print()
+    print(f"  Upgrade: {current_version} -> {latest_version}")
+    print(f"  Changelog: {config['CHANGELOG_URL']}")
+
+    # Steps 3 through the final Apply share a tempdir for fetched chart files.
+    with tempfile.TemporaryDirectory() as tmp:
+        temp_dir = Path(tmp)
+        return _apply_upgrade(
+            config=config,
+            chart_dir=chart_dir,
+            backup_dir=backup_dir,
+            values_dir=values_dir,
+            temp_dir=temp_dir,
+            timestamp=timestamp,
+            keep_backups=keep_backups,
+            helmfile_path=helmfile_path,
+            helmfile_name=helmfile_name,
+            dry_run=dry_run,
+            target_version=target_version,
+            exclude_patterns=exclude_patterns,
+            current_version=current_version,
+            latest_version=latest_version,
+            total_steps=total_steps,
+            chart_write_hook=chart_write_hook,
+            helmfile_pin_hook=helmfile_pin_hook,
+            post_pin_hook=post_pin_hook,
+            pre_apply_hook=pre_apply_hook,
+            pin_write_hook=pin_write_hook,
+        )
+
+
+# -----------------------------------------------
+# Default Step 1 — values summary (K10 baseline)
+# -----------------------------------------------
+
+def _default_values_summary(*, values_dir: Path) -> None:
+    """K10 baseline: print ``.image.tag`` for each ``values/*.yaml`` via yq.
+
+    yq missing → graceful install hint. No ``values/*.yaml`` → graceful
+    message. Mirrors the K10 bash default byte-for-byte so consumers can
+    omit the hook when the per-file ``image.tag`` view is enough.
+    """
+    if not values_dir.is_dir():
+        print("    (no values/*.yaml found)")
+        return
+    yaml_files = sorted(values_dir.glob("*.yaml"))
+    if not yaml_files:
+        print("    (no values/*.yaml found)")
+        return
+    if shutil.which("yq") is None:
+        print("    (yq not installed — install with: brew install yq)")
+        return
+    for yaml_file in yaml_files:
+        if not yaml_file.is_file():
+            continue
+        result = subprocess.run(
+            ["yq", '.image.tag // "(unset)"', str(yaml_file)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        tag = (result.stdout or "").strip().strip('"') if result.returncode == 0 else "(error)"
+        if not tag:
+            tag = "(unset)"
+        print(f"    {yaml_file.name}: image.tag={tag}")
+
+
+# -----------------------------------------------
+# Default Step 7 — chart + values + schema write
+# -----------------------------------------------
+
+def _default_chart_write(
+    *,
+    chart_dir: Path,
+    temp_dir: Path,
+    current_version: str,
+    latest_version: str,
+    latest_app_version: str,
+) -> None:
+    """Baseline write: copy Chart.yaml + values.yaml + (optional) schema."""
+    new_chart = temp_dir / "Chart.yaml"
+    shutil.copy2(new_chart, chart_dir / "Chart.yaml")
+    print()
+    print(
+        f"  Updated Chart.yaml ({current_version} -> {latest_version} "
+        f"/ App: {latest_app_version})"
+    )
+
+    values_new = temp_dir / "values-new.yaml"
+    shutil.copy2(values_new, chart_dir / "values.yaml")
+    print("  Updated values.yaml")
+
+    pulled_schema = temp_dir / "values.schema.json"
+    if pulled_schema.is_file():
+        shutil.copy2(pulled_schema, chart_dir / "values.schema.json")
+        print("  Updated values.schema.json")
+
+
+def _apply_upgrade(
+    *,
+    config: dict,
+    chart_dir: Path,
+    backup_dir: Path,
+    values_dir: Path,
+    temp_dir: Path,
+    timestamp: str,
+    keep_backups: int,
+    helmfile_path: Path | None,
+    helmfile_name: str,
+    dry_run: bool,
+    target_version: str,
+    exclude_patterns: str,
+    current_version: str,
+    latest_version: str,
+    total_steps: int = 7,
+    chart_write_hook: ChartWriteHook | None = None,
+    helmfile_pin_hook: HelmfilePinHook | None = None,
+    post_pin_hook: PostPinHook | None = None,
+    pre_apply_hook: PreApplyHook | None = None,
+    pin_write_hook: PinWriteHook | None = None,
+) -> int:
+    # Step 3
+    print()
+    print(f"[Step 3/{total_steps}] Fetching Chart.yaml and values.yaml for version {latest_version}...")
+
+    chart_result = _helm(
+        "show", "chart", config["HELM_CHART"], "--version", latest_version
+    )
+    (temp_dir / "Chart.yaml").write_text(chart_result.stdout)
+
+    values_new = temp_dir / "values-new.yaml"
+    values_result = _helm(
+        "show", "values", config["HELM_CHART"], "--version", latest_version
+    )
+    values_new.write_text(values_result.stdout)
+
+    pulled = temp_dir / "pulled"
+    pulled.mkdir(exist_ok=True)
+    _helm(
+        "pull",
+        config["HELM_CHART"],
+        "--version", latest_version,
+        "--untar",
+        "--untardir", str(pulled),
+    )
+    schema_src = None
+    if pulled.is_dir():
+        for entry in sorted(pulled.iterdir()):
+            if entry.is_dir():
+                candidate = entry / "values.schema.json"
+                if candidate.is_file():
+                    schema_src = candidate
+                break
+    if schema_src is not None:
+        shutil.copy2(schema_src, temp_dir / "values.schema.json")
+
+    values_old = temp_dir / "values-old.yaml"
+    if config["CHART_TYPE"] == "local":
+        local_values = chart_dir / "values.yaml"
+        if local_values.is_file():
+            shutil.copy2(local_values, values_old)
+    else:
+        old_result = _helm(
+            "show", "values", config["HELM_CHART"], "--version", current_version
+        )
+        # bash redirected stderr to /dev/null and tolerated failure; we mirror
+        # by writing whatever stdout came back (possibly empty).
+        values_old.write_text(old_result.stdout)
+
+    new_chart = temp_dir / "Chart.yaml"
+    if (
+        not new_chart.is_file()
+        or new_chart.stat().st_size == 0
+        or not values_new.is_file()
+        or values_new.stat().st_size == 0
+    ):
+        print(f"  ERROR: Failed to fetch chart for version {latest_version}")
+        return 1
+
+    latest_app_version = _read_yaml_field(new_chart, "appVersion")
+    print(f"  Downloaded successfully (App: {latest_app_version})")
+
+    # Step 4
+    print()
+    print(f"[Step 4/{total_steps}] Chart.yaml diff (current vs target)...")
+    print(SEPARATOR)
+    sys.stdout.write(_diff(chart_dir / "Chart.yaml", new_chart))
+    print(SEPARATOR)
+
+    # Step 5
+    print()
+    print(f"[Step 5/{total_steps}] values.yaml diff (current vs target)...")
+    if values_old.is_file() and values_old.stat().st_size > 0:
+        diff_text = _diff(values_old, values_new)
+        diff_lines = diff_text.count("\n")
+        print(f"  Total diff lines: {diff_lines} (showing first 80)")
+        print(SEPARATOR)
+        for line in diff_text.splitlines()[:80]:
+            print(line)
+        print(SEPARATOR)
+    else:
+        print("  Could not fetch old version values for comparison")
+
+    # Step 6
+    print()
+    print(f"[Step 6/{total_steps}] Checking custom values for breaking changes...")
+    if exclude_patterns:
+        print(f"  Excluding patterns: {exclude_patterns}")
+
+    old_keys = _extract_top_keys(values_old)
+    new_keys = _extract_top_keys(values_new)
+    removed_keys = sorted(old_keys - new_keys)
+    added_keys = sorted(new_keys - old_keys)
+    old_present = values_old.is_file() and values_old.stat().st_size > 0
+
+    if values_dir.is_dir():
+        files = sorted(values_dir.glob("*.yaml"))
+    else:
+        files = []
+
+    for values_file in files:
+        if not values_file.is_file():
+            continue
+        filename = values_file.name
+        if _is_excluded(filename, exclude_patterns):
+            print()
+            print(f"=== values/{filename} === (SKIPPED)")
+            continue
+
+        print()
+        print(f"=== values/{filename} ===")
+
+        if old_present:
+            if removed_keys:
+                print("  !!  Removed top-level keys in target values.yaml:")
+                used_in_file = _used_top_level_keys(values_file)
+                for key in removed_keys:
+                    if key in used_in_file:
+                        print(f"    - {key}  <-- USED in your {filename}!")
+                    else:
+                        print(f"    - {key}")
+
+            if added_keys:
+                print("  ++  New top-level keys in target values.yaml:")
+                for key in added_keys:
+                    print(f"    - {key}")
+
+            if not removed_keys and not added_keys:
+                print("  OK  No breaking top-level key changes detected")
+        else:
+            print("  SKIP  Could not compare (old version values unavailable)")
+
+    # Blank before the next step (matches the bash "echo \"\"" that
+    # precedes the Step 7 / dry-run branch in every template).
+    print()
+
+    # K10 mirror stage = Step 7 of 8. Skipped entirely when
+    # total_steps==7 (K6/K7/K8/K9 baseline).
+    if total_steps >= 8:
+        if dry_run:
+            print(f"[Step 7/{total_steps}] Mirror stage SKIPPED in dry-run.")
+            print()
+        else:
+            # K10 bash inserts another blank line before the mirror header
+            # regardless of whether do_mirror is defined.
+            print()
+            if pre_apply_hook is not None:
+                print(
+                    f"[Step 7/{total_steps}] Mirroring upstream images to "
+                    f"private registry..."
+                )
+                rc = pre_apply_hook(
+                    chart_dir=chart_dir,
+                    temp_dir=temp_dir,
+                    values_dir=values_dir,
+                    latest_version=latest_version,
+                    latest_app_version=latest_app_version,
+                )
+                if rc != 0:
+                    print()
+                    print(
+                        "  ERROR: mirror stage failed. Aborting upgrade "
+                        "(no files modified).",
+                        file=sys.stderr,
+                    )
+                    return rc
+            else:
+                print(
+                    f"[Step 7/{total_steps}] Mirror stage skipped "
+                    f"(do_mirror not defined in CONFIG)."
+                )
+
+    # Final step = Apply (or DRY-RUN exit). ``apply_step`` is the final
+    # step number (7 for K6/K7/K8/K9, 8 for K10).
+    apply_step = total_steps
+    if dry_run:
+        print(
+            f"[Step {apply_step}/{total_steps}] DRY-RUN complete. "
+            f"No files were changed."
+        )
+        print()
+        print("  To apply: ./upgrade.py")
+        if target_version:
+            print(f"  To apply: ./upgrade.py --version {target_version}")
+        return 0
+
+    print(f"[Step {apply_step}/{total_steps}] Applying upgrade...")
+
+    backup_target = backup_dir / timestamp
+    backup_target.mkdir(parents=True, exist_ok=True)
+
+    local_chart_yaml = chart_dir / "Chart.yaml"
+    if local_chart_yaml.is_file():
+        shutil.copy2(local_chart_yaml, backup_target / "Chart.yaml")
+    if helmfile_path is not None and helmfile_path.is_file():
+        shutil.copy2(helmfile_path, backup_target / helmfile_name)
+
+    local_values_yaml = chart_dir / "values.yaml"
+    if local_values_yaml.is_file():
+        shutil.copy2(local_values_yaml, backup_target / "values.yaml")
+
+    local_schema = chart_dir / "values.schema.json"
+    if local_schema.is_file():
+        shutil.copy2(local_schema, backup_target / "values.schema.json")
+
+    if values_dir.is_dir():
+        for values_file in sorted(values_dir.glob("*.yaml")):
+            if not values_file.is_file():
+                continue
+            if _is_excluded(values_file.name, exclude_patterns):
+                continue
+            shutil.copy2(values_file, backup_target / values_file.name)
+
+    print(f"  Backed up to: backup/{timestamp}/")
+    for entry in sorted(backup_target.iterdir()):
+        print(f"    - {entry.name}")
+
+    # Chart + values + schema write (overridable for K9 wrapper-mode).
+    if chart_write_hook is not None:
+        chart_write_hook(
+            chart_dir=chart_dir,
+            temp_dir=temp_dir,
+            current_version=current_version,
+            latest_version=latest_version,
+            latest_app_version=latest_app_version,
+        )
+    else:
+        _default_chart_write(
+            chart_dir=chart_dir,
+            temp_dir=temp_dir,
+            current_version=current_version,
+            latest_version=latest_version,
+            latest_app_version=latest_app_version,
+        )
+
+    # Version pin rewrite. The default target is the helmfile (with the K9
+    # tracked-chart scope override); the argocd-pin template passes
+    # ``pin_write_hook`` to redirect the pin into the ArgoCD metadata
+    # file(s) instead. That hook fires regardless of helmfile presence,
+    # since the migrated components no longer ship a helmfile.
+    if pin_write_hook is not None:
+        pins = pin_write_hook(
+            chart_dir=chart_dir,
+            current_version=current_version,
+            latest_version=latest_version,
+        )
+        print(
+            f"  Updated version pin ({pins} file(s): "
+            f"{current_version} -> {latest_version})"
+        )
+    elif helmfile_path is not None and helmfile_path.is_file():
+        if helmfile_pin_hook is not None:
+            pins = helmfile_pin_hook(
+                helmfile_path=helmfile_path,
+                helmfile_name=helmfile_name,
+                current_version=current_version,
+                latest_version=latest_version,
+            )
+        else:
+            pins = _update_helmfile_pins(
+                helmfile_path, current_version, latest_version
+            )
+        print(
+            f"  Updated {helmfile_name} ({pins} pin(s): "
+            f"{current_version} -> {latest_version})"
+        )
+
+    # Template-specific extension point (e.g. external-with-image-tag rewrites
+    # `tag: vX.Y.Z` in values files). No-op when the consumer does not pass one.
+    if post_pin_hook is not None:
+        post_pin_hook(
+            values_dir=values_dir,
+            exclude_patterns=exclude_patterns,
+            latest_app_version=latest_app_version,
+        )
+
+    _auto_prune_backups(backup_dir, keep_backups)
+
+    print()
+    print(DOUBLE_SEP)
+    print(f" Upgrade complete! ({current_version} -> {latest_version})")
+    print()
+    print(f" Changelog: {config['CHANGELOG_URL']}")
+    print()
+    print(" Next steps:")
+    print("   1. Review values/ files for any needed changes")
+    print("   2. Run: helmfile diff")
+    print("   3. Run: helmfile apply")
+    print()
+    print(" To rollback:")
+    print("   ./upgrade.py --rollback")
+    print(DOUBLE_SEP)
+    return 0
