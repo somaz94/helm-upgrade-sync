@@ -603,8 +603,8 @@ def verify_image_with_fallback(
     GA version that has a published image when the requested tag is
     missing.
 
-    Extracted from the byte-for-byte identical Step 4 blocks in ``local_cr_version``
-    (``local_cr_version``) and ``external_oci_cr_version``. Output
+    Extracted from the byte-for-byte identical Step 4 blocks in
+    ``local_cr_version`` and ``external_oci_cr_version``. Output
     (stdout) is preserved verbatim.
     """
     print()

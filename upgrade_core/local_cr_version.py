@@ -189,7 +189,7 @@ def _stack_upgrade(
 ) -> int:
     """``local_cr_version`` 7-step main flow.
 
-    Differs from ``external_oci_cr_version``'s :func:`external_oci_cr_version._stack_upgrade`:
+    Differs from :func:`external_oci_cr_version._stack_upgrade`:
       - Step 1 also reads Chart.yaml.appVersion (``external_oci_cr_version`` reads OCI chart pin).
       - Step 3 "Already up to date" check is wider — both VALUES_FILE
         version AND Chart.yaml appVersion must match upstream.
