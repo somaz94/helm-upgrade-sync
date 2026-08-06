@@ -85,7 +85,7 @@ from ._common_helmfile import detect_helmfile
 
 
 # =============================================================
-# ``external_oci_cr_version``-specific constants
+# Template-specific constants
 # =============================================================
 
 # Chart-pin backup dirs append ``-chart`` so list/rollback can branch
@@ -104,7 +104,7 @@ _INDENTED_VERSION_RE = re.compile(r"^[ \t]+version:[ \t]+(\S+)\s*$")
 
 
 # =============================================================
-# Backup classifier + version reader (``external_oci_cr_version``-specific)
+# Backup classifier + version reader (template-specific)
 # =============================================================
 
 def _classify_backup(directory: Path, values_file: str = "") -> str:
@@ -163,7 +163,7 @@ def _read_backup_version(
 
 
 # =============================================================
-# Backup listing + rollback (``external_oci_cr_version``: chart vs stack branch)
+# Backup listing + rollback (chart vs stack branch)
 # =============================================================
 
 def _list_backups(
@@ -258,7 +258,7 @@ def _do_rollback(
 
 
 # =============================================================
-# OCI chart-pin helpers (``external_oci_cr_version``-specific)
+# OCI chart-pin helpers (template-specific)
 # =============================================================
 
 def _read_helmfile_chart_url(helmfile_path: Path) -> str:

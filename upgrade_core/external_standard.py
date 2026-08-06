@@ -80,8 +80,8 @@ from ._common_helmfile import (
 
 # Hook signatures for templates that extend the base flow without
 # forking the whole body. All hooks accept keyword-only arguments and
-# default to ``None`` so ``external_standard`` / ``external_with_image_tag`` behavior is preserved when no override
-# is supplied.
+# default to ``None`` so the baseline and ``external_with_image_tag``
+# behavior is preserved when no override is supplied.
 
 # Step 2 — fetch latest version. Default = helm search repo + parse JSON.
 # Returns ``(latest_version_found, latest_app_version_from_helm_search)``.

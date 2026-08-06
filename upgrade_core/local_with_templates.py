@@ -193,7 +193,7 @@ Examples:
 # -----------------------------------------------
 # list_backups / do_rollback — local-specific (template/value counts +
 # templates/ + EXTRA_DIRS restore). External_standard's helpers cannot
-# be reused here because the ``local_with_templates`` backup tree includes additional dirs.
+# be reused here because this template's backup tree includes additional dirs.
 # -----------------------------------------------
 
 def _list_backups(backup_dir: Path) -> None:

@@ -114,7 +114,7 @@ def _write_chart_wrapper_aware(
     latest_app_version: str,
     wrapper_mode: bool,
 ) -> None:
-    """Step 7 chart write override for ``external_oci``.
+    """Step 7 chart write override.
 
     ``wrapper_mode=True`` — local Chart.yaml is component metadata, NOT
     a mirror of the upstream chart. Patch only the ``version:`` line;
@@ -215,7 +215,7 @@ def _helmfile_pin_default_or_scoped(
     latest_version: str,
     tracked_chart: str,
 ) -> int:
-    """Step 7 helmfile pin override for ``external_oci``.
+    """Step 7 helmfile pin override.
 
     ``tracked_chart`` empty → fall back to the ``external_standard`` baseline (4 sed
     expressions via :func:`_common_helmfile.update_helmfile_pins`).
@@ -257,7 +257,7 @@ def run(config: dict, argv: list[str], script_path: str | os.PathLike) -> int:
                 f"no tag matched prefix '{tag_prefix}')"
             )
             return "", ""
-        # ``external_oci`` places the original tag in the "app version" slot purely
+        # This template places the original tag in the "app version" slot purely
         # for the operator log line; the real appVersion is read from
         # the freshly fetched Chart.yaml in Step 3.
         return latest_version_found, latest_tag

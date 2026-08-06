@@ -25,12 +25,12 @@ What this script does:
 
 Difference vs ``external-oci-cr-version``:
 
-  - **``local_cr_version`` owns** Chart.yaml (local metadata mirror).
-  - **``local_cr_version`` only**: ``MIRROR_CHART_VERSION`` option.
-  - **``local_cr_version`` only**: backup contains Chart.yaml + values file (``external_oci_cr_version`` backups
-    are values-only).
-  - **``local_cr_version`` does NOT** have the OCI chart-pin sub-flow
-    (``--check-chart`` / ``--upgrade-chart``) — ``local_cr_version`` is a local chart so
+  - **This template owns** Chart.yaml (local metadata mirror).
+  - **This template only**: ``MIRROR_CHART_VERSION`` option.
+  - **This template only**: backup contains Chart.yaml + values file
+    (``external_oci_cr_version`` backups are values-only).
+  - **This template does NOT** have the OCI chart-pin sub-flow
+    (``--check-chart`` / ``--upgrade-chart``) — this is a local chart so
     there's no upstream OCI pin to track.
 
 **0 consumer** currently (orphan template, scaffolding for future
@@ -75,7 +75,7 @@ from ._common_helmfile import detect_helmfile
 
 
 # =============================================================
-# ``local_cr_version``-specific helpers
+# Template-specific helpers
 # =============================================================
 
 def _read_chart_field(chart_yaml: Path, field: str) -> str:
@@ -98,9 +98,9 @@ def _read_chart_field(chart_yaml: Path, field: str) -> str:
 
 
 def _list_backups(backup_dir: Path, values_file: str) -> None:
-    """Print available ``local_cr_version`` backups (Chart.yaml + values file).
+    """Print available backups (Chart.yaml + values file).
 
-    ``local_cr_version`` backups always include the values file and (when present)
+    Backups always include the values file and (when present)
     Chart.yaml — no chart-pin classifier needed (``external_oci_cr_version`` sister).
     """
 
@@ -124,7 +124,7 @@ def _do_rollback(
 ) -> int:
     """Restore Chart.yaml + values file from the selected backup.
 
-    Stack-only path (no chart-pin branch — ``local_cr_version`` has no OCI chart pin).
+    Stack-only path (no chart-pin branch — this template has no OCI chart pin).
     Detects downgrade vs live CR. On downgrade, defers to
     :func:`._common_cr.handle_downgrade_rollback` (auto-webhook flow or
     manual 7-step instructions).
@@ -187,7 +187,7 @@ def _stack_upgrade(
     target_version: str,
     keep_backups: int,
 ) -> int:
-    """``local_cr_version`` 7-step main flow.
+    """7-step main flow.
 
     Differs from :func:`external_oci_cr_version._stack_upgrade`:
       - Step 1 also reads Chart.yaml.appVersion (``external_oci_cr_version`` reads OCI chart pin).
@@ -263,7 +263,7 @@ def _stack_upgrade(
             return 1
         print(f"  Latest available:      {latest_version}")
 
-    # "Already up to date" — ``local_cr_version`` widens the check: VALUES_FILE.version
+    # "Already up to date" — this template widens the check: VALUES_FILE.version
     # must match AND (Chart.yaml.appVersion absent OR matches).
     up_to_date = current_version == latest_version and (
         not current_app_version or current_app_version == latest_version
