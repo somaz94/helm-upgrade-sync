@@ -53,8 +53,10 @@ from pathlib import Path
 from ._common import (
     DATA_BACKUP_WARNING,
     auto_prune_backups,
+    backup_file_names,
     cleanup_backups,
     now_timestamp,
+    print_backup_list,
     prompt_major_bump,
     prompt_select_backup,
     read_keep_backups_env,
@@ -168,13 +170,8 @@ def _list_backups(
     backup_dir: Path, values_file: str, version_key: str
 ) -> None:
     """Print available backups with type label and tracked version."""
-    print("Available backups:")
-    print()
-    backups = sorted_backups(backup_dir)
-    if not backups:
-        print("  No backups found.")
-        return
-    for idx, d in enumerate(backups, start=1):
+
+    def describe(d: Path) -> str:
         kind = _classify_backup(d, values_file)
         ver = _read_backup_version(d, values_file, version_key)
         if kind == "chart":
@@ -183,10 +180,10 @@ def _list_backups(
             label = version_key
         else:
             label = "backup"
-        names = sorted(p.name for p in d.iterdir() if p.is_file())
-        files = ", ".join(names)
-        print(f"  [{idx}] {d.name} ({label}: {ver or 'unknown'}) — {files}")
-    print()
+        files = backup_file_names(d, files_only=True)
+        return f"({label}: {ver or 'unknown'}) — {files}"
+
+    print_backup_list(backup_dir, describe)
 
 
 def _do_rollback(

@@ -16,6 +16,14 @@ Exported helpers — all stdlib-only:
 - :func:`is_excluded` — substring match against a comma-separated pattern
   string (used by the ``--exclude`` flag in the chart-flavored templates;
   not used by ``ansible_github_release``).
+- :func:`parse_upgrade_argv` — the shared ``sys.exit``-style CLI loop
+  behind ``external_standard`` / ``ansible_github_release`` /
+  ``local_with_templates``'s ``_parse_args``.
+- :func:`print_backup_list` / :func:`backup_file_names` — the shared
+  ``--list-backups`` frame; each template supplies only its row text.
+- :func:`print_run_banner` / :func:`print_upgrade_footer` — the
+  DOUBLE_SEP-framed opening and closing blocks of those same three
+  templates' ``_main_flow``.
 """
 
 from __future__ import annotations
@@ -24,10 +32,12 @@ import json
 import os
 import re
 import shutil
+import sys
 import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 
 # Output separators shared across every upgrade template's `_main_flow`
@@ -144,6 +154,193 @@ def is_excluded(filename: str, patterns: str) -> bool:
         if pat and pat in filename:
             return True
     return False
+
+
+# -----------------------------------------------
+# CLI argument loop (sys.exit-style templates)
+# -----------------------------------------------
+#
+# ``external_standard``, ``ansible_github_release`` and
+# ``local_with_templates`` each carried a byte-identical copy of this
+# loop; only the sub-command callbacks and the presence of ``--exclude``
+# differ. The CR templates use a different contract — they
+# return a ``(mode, ..., exit_code)`` tuple instead of calling
+# ``sys.exit`` — and deliberately keep their own ``_parse_argv``.
+
+def parse_upgrade_argv(
+    argv: list[str],
+    *,
+    usage: Callable[[], None],
+    list_backups: Callable[[], None],
+    rollback: Callable[[], None],
+    cleanup_backups: Callable[[], None],
+    support_exclude: bool = True,
+) -> dict:
+    """Parse the shared upgrade CLI flags, exiting on every sub-command.
+
+    Returns ``{"dry_run", "target_version", "exclude_patterns"}`` for the
+    main flow. ``--help``, ``--list-backups``, ``--rollback`` and
+    ``--cleanup-backups`` invoke their callback and then ``sys.exit(0)``.
+    A missing ``--version`` / ``--exclude`` operand exits 1; an unknown
+    option prints usage and exits 0 (bash-template parity — the exit code
+    is deliberately 0, not 1).
+
+    ``support_exclude=False`` drops ``--exclude`` from the grammar so it
+    falls through to the unknown-option branch
+    (``ansible_github_release`` has no values dir).
+    """
+    dry_run = False
+    target_version = ""
+    exclude_patterns = ""
+
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            usage()
+            sys.exit(0)
+        elif arg == "--list-backups":
+            list_backups()
+            sys.exit(0)
+        elif arg == "--rollback":
+            rollback()
+            sys.exit(0)
+        elif arg == "--cleanup-backups":
+            cleanup_backups()
+            sys.exit(0)
+        elif arg == "--dry-run":
+            dry_run = True
+            i += 1
+        elif arg == "--exclude" and support_exclude:
+            exclude_patterns = argv[i + 1] if i + 1 < len(argv) else ""
+            if not exclude_patterns:
+                print("ERROR: --exclude requires a pattern (e.g., --exclude old-release,test)")
+                sys.exit(1)
+            i += 2
+        elif arg == "--version":
+            target_version = argv[i + 1] if i + 1 < len(argv) else ""
+            if not target_version:
+                print("ERROR: --version requires a version number")
+                sys.exit(1)
+            i += 2
+        else:
+            print(f"Unknown option: {arg}")
+            print()
+            usage()
+            sys.exit(0)
+
+    return {
+        "dry_run": dry_run,
+        "target_version": target_version,
+        "exclude_patterns": exclude_patterns,
+    }
+
+
+# -----------------------------------------------
+# Backup listing (per-template row descriptions)
+# -----------------------------------------------
+#
+# Every template prints the same "Available backups:" frame and only
+# differs in how it labels each row. ``describe`` receives one backup
+# directory and returns the text that goes inside the brackets after
+# the timestamp.
+
+def print_backup_list(
+    backup_dir: Path, describe: Callable[[Path], str]
+) -> None:
+    """Print the shared backup-listing frame, one ``describe`` row each.
+
+    Emits nothing but the ``  No backups found.`` line when the backup
+    dir is empty or absent — the trailing blank line is skipped in that
+    case, matching every template's original early ``return``.
+    """
+    print("Available backups:")
+    print()
+    backups = sorted_backups(backup_dir)
+    if not backups:
+        print("  No backups found.")
+        return
+    for idx, directory in enumerate(backups, start=1):
+        print(f"  [{idx}] {directory.name} {describe(directory)}")
+    print()
+
+
+def backup_file_names(directory: Path, *, files_only: bool = False) -> str:
+    """Return the comma-joined sorted child names of a backup directory."""
+    entries = directory.iterdir()
+    if files_only:
+        entries = (p for p in entries if p.is_file())
+    return ", ".join(sorted(p.name for p in entries))
+
+
+# -----------------------------------------------
+# _main_flow banner + footer
+# -----------------------------------------------
+#
+# ``external_standard`` / ``ansible_github_release`` /
+# ``local_with_templates`` open and close their `_main_flow` with the same
+# DOUBLE_SEP-framed blocks; only the per-template extra lines differ.
+# Both helpers stay byte-for-byte compatible with the bash bodies, so
+# any spacing change here has to be made once instead of three times.
+
+def print_run_banner(
+    script_name: str,
+    *,
+    dry_run: bool,
+    target_version: str,
+    extra_lines: list[str] | None = None,
+) -> None:
+    """Print the ``_main_flow`` opening banner.
+
+    ``extra_lines`` are emitted verbatim (leading space included) after
+    the Target line — the chart-flavored templates pass the ``Exclude:``
+    line, ``ansible_github_release`` the ``Major pin:`` line.
+    """
+    print(DOUBLE_SEP)
+    print(f" {script_name}")
+    if dry_run:
+        print(" Mode: DRY-RUN (no files will be changed)")
+    if target_version:
+        print(f" Target: v{target_version}")
+    for line in extra_lines or []:
+        print(line)
+    print(DOUBLE_SEP)
+
+
+def print_upgrade_footer(
+    config: dict,
+    current_version: str,
+    latest_version: str,
+    *,
+    next_steps: list[str],
+    rollback_header: str = " To rollback:",
+    extra_sections: list[list[str]] | None = None,
+) -> None:
+    """Print the ``Upgrade complete!`` closing block.
+
+    ``extra_sections`` are emitted between the Changelog line and
+    ``Next steps:``, each followed by a blank line
+    (``local_with_templates`` uses one for its "Custom templates
+    preserved:" list). ``rollback_header`` lets ``ansible_github_release``
+    widen the label without forking the block.
+    """
+    print()
+    print(DOUBLE_SEP)
+    print(f" Upgrade complete! ({current_version} -> {latest_version})")
+    print()
+    print(f" Changelog: {config['CHANGELOG_URL']}")
+    print()
+    for section in extra_sections or []:
+        for line in section:
+            print(line)
+        print()
+    print(" Next steps:")
+    for line in next_steps:
+        print(line)
+    print()
+    print(rollback_header)
+    print("   ./upgrade.py --rollback")
+    print(DOUBLE_SEP)
 
 
 # -----------------------------------------------

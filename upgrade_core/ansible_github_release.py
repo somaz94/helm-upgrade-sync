@@ -18,12 +18,16 @@ import sys
 from pathlib import Path
 
 from ._common import (
-    DOUBLE_SEP,
     SEPARATOR,
     auto_prune_backups as _auto_prune_backups,
+    backup_file_names as _backup_file_names,
     cleanup_backups as _cleanup_backups,
     fetch_github_ga_versions as _fetch_github_ga_versions,
     now_timestamp,
+    parse_upgrade_argv as _parse_upgrade_argv,
+    print_backup_list as _print_backup_list,
+    print_run_banner as _print_run_banner,
+    print_upgrade_footer as _print_upgrade_footer,
     prompt_major_bump as _prompt_major_bump,
     prompt_select_backup as _prompt_select_backup,
     read_keep_backups_env,
@@ -81,43 +85,20 @@ def _parse_args(
     ansible_inventory: str,
     ansible_upgrade_playbook: str,
 ) -> dict | None:
-    dry_run = False
-    target_version = ""
-
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg in ("-h", "--help"):
-            _usage(prog, keep_backups)
-            sys.exit(0)
-        elif arg == "--list-backups":
-            _list_backups(backup_dir, version_file, version_key)
-            sys.exit(0)
-        elif arg == "--rollback":
-            _do_rollback(
-                backup_dir, chart_dir, version_file, version_key,
-                ansible_dir, ansible_inventory, ansible_upgrade_playbook,
-            )
-            sys.exit(0)
-        elif arg == "--cleanup-backups":
-            _cleanup_backups(backup_dir, keep_backups)
-            sys.exit(0)
-        elif arg == "--dry-run":
-            dry_run = True
-            i += 1
-        elif arg == "--version":
-            target_version = argv[i + 1] if i + 1 < len(argv) else ""
-            if not target_version:
-                print("ERROR: --version requires a version number")
-                sys.exit(1)
-            i += 2
-        else:
-            print(f"Unknown option: {arg}")
-            print()
-            _usage(prog, keep_backups)
-            sys.exit(0)
-
-    return {"dry_run": dry_run, "target_version": target_version}
+    # This template has no values dir, so `--exclude` stays out of the
+    # grammar and falls through to the unknown-option branch.
+    args = _parse_upgrade_argv(
+        argv,
+        usage=lambda: _usage(prog, keep_backups),
+        list_backups=lambda: _list_backups(backup_dir, version_file, version_key),
+        rollback=lambda: _do_rollback(
+            backup_dir, chart_dir, version_file, version_key,
+            ansible_dir, ansible_inventory, ansible_upgrade_playbook,
+        ),
+        cleanup_backups=lambda: _cleanup_backups(backup_dir, keep_backups),
+        support_exclude=False,
+    )
+    return {"dry_run": args["dry_run"], "target_version": args["target_version"]}
 
 
 def _usage(prog: str, keep_backups: int) -> None:
@@ -157,24 +138,18 @@ Examples:
 # -----------------------------------------------
 
 def _list_backups(backup_dir: Path, version_file: str, version_key: str) -> None:
-    print("Available backups:")
-    print()
-    backups = _sorted_backups(backup_dir)
-    if not backups:
-        print("  No backups found.")
-        return
     vfile_base = Path(version_file).name
-    for idx, d in enumerate(backups, start=1):
+
+    def describe(d: Path) -> str:
         ver = "unknown"
         snapshot = d / vfile_base
         if snapshot.is_file():
             value = _read_yaml_value(snapshot, version_key)
             if value:
                 ver = value
-        names = sorted(p.name for p in d.iterdir())
-        files = ", ".join(names)
-        print(f"  [{idx}] {d.name} (version: {ver}) — {files}")
-    print()
+        return f"(version: {ver}) — {_backup_file_names(d)}"
+
+    _print_backup_list(backup_dir, describe)
 
 
 def _do_rollback(
@@ -238,15 +213,14 @@ def _main_flow(
     dry_run: bool,
     target_version: str,
 ) -> int:
-    print(DOUBLE_SEP)
-    print(f" {config['SCRIPT_NAME']}")
-    if dry_run:
-        print(" Mode: DRY-RUN (no files will be changed)")
-    if target_version:
-        print(f" Target: v{target_version}")
-    if config["MAJOR_PIN"]:
-        print(f" Major pin: {config['MAJOR_PIN']}.x")
-    print(DOUBLE_SEP)
+    _print_run_banner(
+        config["SCRIPT_NAME"],
+        dry_run=dry_run,
+        target_version=target_version,
+        extra_lines=(
+            [f" Major pin: {config['MAJOR_PIN']}.x"] if config["MAJOR_PIN"] else []
+        ),
+    )
 
     # Step 1
     print()
@@ -339,21 +313,16 @@ def _main_flow(
 
     _auto_prune_backups(backup_dir, keep_backups)
 
-    print()
-    print(DOUBLE_SEP)
-    print(f" Upgrade complete! ({current_version} -> {latest_version})")
-    print()
-    print(f" Changelog: {config['CHANGELOG_URL']}")
-    print()
-    print(" Next steps:")
-    print(f"   1. Review the change: git diff {config['VERSION_FILE']}")
-    print(
-        f"   2. Apply to hosts:    cd {config['ANSIBLE_DIR']} && ansible-playbook "
-        f"-i {config['ANSIBLE_INVENTORY']} {config['ANSIBLE_UPGRADE_PLAYBOOK']}"
+    _print_upgrade_footer(
+        config,
+        current_version,
+        latest_version,
+        next_steps=[
+            f"   1. Review the change: git diff {config['VERSION_FILE']}",
+            f"   2. Apply to hosts:    cd {config['ANSIBLE_DIR']} && ansible-playbook "
+            f"-i {config['ANSIBLE_INVENTORY']} {config['ANSIBLE_UPGRADE_PLAYBOOK']}",
+            "   3. Verify on a host:  curl http://<host>:<port>/metrics | head",
+        ],
+        rollback_header=" To rollback (source file only, then re-run ansible-playbook):",
     )
-    print("   3. Verify on a host:  curl http://<host>:<port>/metrics | head")
-    print()
-    print(" To rollback (source file only, then re-run ansible-playbook):")
-    print("   ./upgrade.py --rollback")
-    print(DOUBLE_SEP)
     return 0

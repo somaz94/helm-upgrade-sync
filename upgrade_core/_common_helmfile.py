@@ -35,7 +35,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ._common import prompt_select_backup, sorted_backups
+from ._common import (
+    backup_file_names,
+    print_backup_list,
+    prompt_select_backup,
+    sorted_backups,
+)
 
 
 def read_yaml_field(path: Path, field: str) -> str:
@@ -199,21 +204,15 @@ def update_helmfile_pins(
 
 def list_backups(backup_dir: Path) -> None:
     """Chart-flavored backup listing — reads Chart.yaml.version for each entry."""
-    print("Available backups:")
-    print()
-    backups = sorted_backups(backup_dir)
-    if not backups:
-        print("  No backups found.")
-        return
-    for idx, d in enumerate(backups, start=1):
-        chart_ver = "unknown"
+
+    def describe(d: Path) -> str:
         chart_yaml = d / "Chart.yaml"
+        chart_ver = "unknown"
         if chart_yaml.is_file():
             chart_ver = read_yaml_field(chart_yaml, "version") or "unknown"
-        names = sorted(p.name for p in d.iterdir())
-        files = ", ".join(names)
-        print(f"  [{idx}] {d.name} (Chart: {chart_ver}) — {files}")
-    print()
+        return f"(Chart: {chart_ver}) — {backup_file_names(d)}"
+
+    print_backup_list(backup_dir, describe)
 
 
 def do_rollback(backup_dir: Path, chart_dir: Path, values_dir: Path) -> None:

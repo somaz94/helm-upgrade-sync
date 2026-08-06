@@ -88,6 +88,31 @@ def http_get(url: str, *, timeout: float = HTTP_TIMEOUT) -> bytes:
         return b""
 
 
+def http_get_json(url: str, *, timeout: float = HTTP_TIMEOUT):
+    """Return the parsed JSON body of ``url``, or ``None`` on any failure.
+
+    Collapses the ``http_get`` -> empty-body guard -> ``json.loads`` ->
+    ``JSONDecodeError`` guard chain that each version-source backend in
+    :func:`fetch_ga_versions` repeated verbatim. Callers that need
+    ``http_get`` itself as a test seam (``external_oci_cr_version``'s
+    chart-pin fetcher patches it per-module) keep calling ``http_get``
+    directly.
+    """
+    body = http_get(url, timeout=timeout)
+    if not body:
+        return None
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return None
+
+
+def _semver_tags(tags: list[str]) -> list[str]:
+    """Strip a leading ``v`` from each tag, keeping only semver-shaped ones."""
+    stripped = [re.sub(r"^v", "", t) for t in tags]
+    return [t for t in stripped if SEMVER_RE.match(t)]
+
+
 def fetch_ga_versions(
     source: str, source_arg: str, major_pin: str
 ) -> list[str]:
@@ -105,51 +130,33 @@ def fetch_ga_versions(
     Unknown source → empty list.
     """
     if source == "elastic-artifacts":
-        body = http_get("https://artifacts-api.elastic.co/v1/versions")
-        if not body:
-            return []
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
+        data = http_get_json("https://artifacts-api.elastic.co/v1/versions")
+        if data is None:
             return []
         versions = [v for v in data.get("versions", []) if SEMVER_RE.match(v)]
     elif source == "github-releases":
         if not source_arg:
             return []
-        url = (
+        data = http_get_json(
             f"https://api.github.com/repos/{source_arg}/releases?per_page=100"
         )
-        body = http_get(url)
-        if not body:
+        if data is None:
             return []
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            return []
-        tags = [
+        versions = _semver_tags([
             r.get("tag_name", "")
             for r in data
             if not r.get("prerelease") and not r.get("draft")
-        ]
-        stripped = [re.sub(r"^v", "", t) for t in tags]
-        versions = [t for t in stripped if SEMVER_RE.match(t)]
+        ])
     elif source == "docker-hub-tags":
         if not source_arg:
             return []
-        url = (
+        data = http_get_json(
             f"https://hub.docker.com/v2/repositories/{source_arg}/"
             "tags?page_size=100&ordering=last_updated"
         )
-        body = http_get(url)
-        if not body:
+        if data is None:
             return []
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            return []
-        tags = [t.get("name", "") for t in data.get("results", [])]
-        stripped = [re.sub(r"^v", "", t) for t in tags]
-        versions = [t for t in stripped if SEMVER_RE.match(t)]
+        versions = _semver_tags([t.get("name", "") for t in data.get("results", [])])
     else:
         return []
 

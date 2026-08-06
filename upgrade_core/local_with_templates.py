@@ -46,12 +46,15 @@ import tempfile
 from pathlib import Path
 
 from ._common import (
-    DOUBLE_SEP,
     SEPARATOR,
     auto_prune_backups as _auto_prune_backups,
     cleanup_backups as _cleanup_backups,
     is_excluded as _is_excluded,
     now_timestamp,
+    parse_upgrade_argv as _parse_upgrade_argv,
+    print_backup_list as _print_backup_list,
+    print_run_banner as _print_run_banner,
+    print_upgrade_footer as _print_upgrade_footer,
     prompt_select_backup as _prompt_select_backup,
     read_keep_backups_env,
     sorted_backups as _sorted_backups,
@@ -147,54 +150,15 @@ def _parse_args(
     values_dir: Path,
     templates_dir: Path,
 ) -> dict | None:
-    dry_run = False
-    target_version = ""
-    exclude_patterns = ""
-
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg in ("-h", "--help"):
-            _usage(prog, keep_backups)
-            sys.exit(0)
-        elif arg == "--list-backups":
-            _list_backups(backup_dir)
-            sys.exit(0)
-        elif arg == "--rollback":
-            _do_rollback(backup_dir, chart_dir, values_dir, templates_dir)
-            sys.exit(0)
-        elif arg == "--cleanup-backups":
-            _cleanup_backups(backup_dir, keep_backups)
-            sys.exit(0)
-        elif arg == "--dry-run":
-            dry_run = True
-            i += 1
-        elif arg == "--exclude":
-            exclude_patterns = argv[i + 1] if i + 1 < len(argv) else ""
-            if not exclude_patterns:
-                print(
-                    "ERROR: --exclude requires a pattern "
-                    "(e.g., --exclude old-release,test)"
-                )
-                sys.exit(1)
-            i += 2
-        elif arg == "--version":
-            target_version = argv[i + 1] if i + 1 < len(argv) else ""
-            if not target_version:
-                print("ERROR: --version requires a version number")
-                sys.exit(1)
-            i += 2
-        else:
-            print(f"Unknown option: {arg}")
-            print()
-            _usage(prog, keep_backups)
-            sys.exit(0)
-
-    return {
-        "dry_run": dry_run,
-        "target_version": target_version,
-        "exclude_patterns": exclude_patterns,
-    }
+    return _parse_upgrade_argv(
+        argv,
+        usage=lambda: _usage(prog, keep_backups),
+        list_backups=lambda: _list_backups(backup_dir),
+        rollback=lambda: _do_rollback(
+            backup_dir, chart_dir, values_dir, templates_dir
+        ),
+        cleanup_backups=lambda: _cleanup_backups(backup_dir, keep_backups),
+    )
 
 
 def _usage(prog: str, keep_backups: int) -> None:
@@ -233,14 +197,7 @@ Examples:
 # -----------------------------------------------
 
 def _list_backups(backup_dir: Path) -> None:
-    print("Available backups:")
-    print()
-    backups = _sorted_backups(backup_dir)
-    if not backups:
-        print("  No backups found.")
-        return
-
-    for idx, backup_path in enumerate(backups, start=1):
+    def describe(backup_path: Path) -> str:
         chart_ver = "unknown"
         chart_yaml = backup_path / "Chart.yaml"
         if chart_yaml.is_file():
@@ -260,11 +217,12 @@ def _list_backups(backup_dir: Path) -> None:
             ):
                 val_count += 1
 
-        print(
-            f"  [{idx}] {backup_path.name} (Chart: {chart_ver}) — "
+        return (
+            f"(Chart: {chart_ver}) — "
             f"templates: {tpl_count}, values: {val_count}"
         )
-    print()
+
+    _print_backup_list(backup_dir, describe)
 
 
 def _do_rollback(
@@ -566,15 +524,12 @@ def _main_flow(
     target_version: str,
     exclude_patterns: str,
 ) -> int:
-    print(DOUBLE_SEP)
-    print(f" {config['SCRIPT_NAME']}")
-    if dry_run:
-        print(" Mode: DRY-RUN (no files will be changed)")
-    if target_version:
-        print(f" Target: v{target_version}")
-    if exclude_patterns:
-        print(f" Exclude: {exclude_patterns}")
-    print(DOUBLE_SEP)
+    _print_run_banner(
+        config["SCRIPT_NAME"],
+        dry_run=dry_run,
+        target_version=target_version,
+        extra_lines=[f" Exclude: {exclude_patterns}"] if exclude_patterns else [],
+    )
 
     # Step 1
     print()
@@ -946,23 +901,21 @@ def _apply_upgrade(
 
     _auto_prune_backups(backup_dir, keep_backups)
 
-    print()
-    print(DOUBLE_SEP)
-    print(f" Upgrade complete! ({current_version} -> {latest_version})")
-    print()
-    print(f" Changelog: {config['CHANGELOG_URL']}")
-    print()
-    print(" Custom templates preserved:")
-    for ct in custom_template_list:
-        print(f"   - templates/{ct}")
-    print("   - templates/_pod.tpl (PVC patch)")
-    print()
-    print(" Next steps:")
-    print("   1. Review values/ files for any needed changes")
-    print("   2. Run: helmfile diff")
-    print("   3. Run: helmfile apply")
-    print()
-    print(" To rollback:")
-    print("   ./upgrade.py --rollback")
-    print(DOUBLE_SEP)
+    _print_upgrade_footer(
+        config,
+        current_version,
+        latest_version,
+        extra_sections=[
+            [
+                " Custom templates preserved:",
+                *(f"   - templates/{ct}" for ct in custom_template_list),
+                "   - templates/_pod.tpl (PVC patch)",
+            ]
+        ],
+        next_steps=[
+            "   1. Review values/ files for any needed changes",
+            "   2. Run: helmfile diff",
+            "   3. Run: helmfile apply",
+        ],
+    )
     return 0

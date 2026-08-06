@@ -377,5 +377,220 @@ class PromptMajorBumpTests(unittest.TestCase):
         self.assertLess(warn_idx, changelog_idx)
 
 
+# =============================================================
+# parse_upgrade_argv — the shared sys.exit-style CLI loop
+# =============================================================
+
+
+class ParseUpgradeArgvTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.called: list[str] = []
+        self.hooks = {
+            "usage": lambda: self.called.append("usage"),
+            "list_backups": lambda: self.called.append("list_backups"),
+            "rollback": lambda: self.called.append("rollback"),
+            "cleanup_backups": lambda: self.called.append("cleanup_backups"),
+        }
+
+    def parse(self, argv: list[str], **kw) -> dict:
+        return cm.parse_upgrade_argv(argv, **self.hooks, **kw)
+
+    def test_no_args_returns_defaults(self) -> None:
+        self.assertEqual(
+            self.parse([]),
+            {"dry_run": False, "target_version": "", "exclude_patterns": ""},
+        )
+
+    def test_flags_accumulate_in_any_order(self) -> None:
+        out = self.parse(
+            ["--exclude", "old,test", "--dry-run", "--version", "1.2.3"]
+        )
+        self.assertEqual(
+            out,
+            {
+                "dry_run": True,
+                "target_version": "1.2.3",
+                "exclude_patterns": "old,test",
+            },
+        )
+
+    def test_version_without_operand_exits_one(self) -> None:
+        with redirect_stdout(io.StringIO()) as out:
+            with self.assertRaises(SystemExit) as cm_exit:
+                self.parse(["--version"])
+        self.assertEqual(cm_exit.exception.code, 1)
+        self.assertIn("ERROR: --version requires a version number", out.getvalue())
+
+    def test_exclude_without_operand_exits_one(self) -> None:
+        with redirect_stdout(io.StringIO()) as out:
+            with self.assertRaises(SystemExit) as cm_exit:
+                self.parse(["--exclude"])
+        self.assertEqual(cm_exit.exception.code, 1)
+        self.assertIn("ERROR: --exclude requires a pattern", out.getvalue())
+
+    def test_subcommands_fire_their_hook_then_exit_zero(self) -> None:
+        for flag, hook in (
+            ("--help", "usage"),
+            ("-h", "usage"),
+            ("--list-backups", "list_backups"),
+            ("--rollback", "rollback"),
+            ("--cleanup-backups", "cleanup_backups"),
+        ):
+            with self.subTest(flag=flag):
+                self.called.clear()
+                with self.assertRaises(SystemExit) as cm_exit:
+                    self.parse([flag])
+                self.assertEqual(cm_exit.exception.code, 0)
+                self.assertEqual(self.called, [hook])
+
+    def test_unknown_option_prints_usage_and_exits_zero(self) -> None:
+        with redirect_stdout(io.StringIO()) as out:
+            with self.assertRaises(SystemExit) as cm_exit:
+                self.parse(["--bogus"])
+        # Exit code 0 is deliberate — bash-template parity.
+        self.assertEqual(cm_exit.exception.code, 0)
+        self.assertIn("Unknown option: --bogus", out.getvalue())
+        self.assertEqual(self.called, ["usage"])
+
+    def test_exclude_unsupported_falls_through_to_unknown(self) -> None:
+        # ``ansible_github_release`` has no values dir.
+        with redirect_stdout(io.StringIO()) as out:
+            with self.assertRaises(SystemExit) as cm_exit:
+                self.parse(["--exclude", "old"], support_exclude=False)
+        self.assertEqual(cm_exit.exception.code, 0)
+        self.assertIn("Unknown option: --exclude", out.getvalue())
+
+
+# =============================================================
+# print_backup_list / backup_file_names
+# =============================================================
+
+
+class PrintBackupListTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        bdir = getattr(self, "bdir", None)
+        if bdir is not None:
+            # _make_backup_tree returns <mkdtemp>/backup — drop the mkdtemp root.
+            shutil.rmtree(bdir.parent, ignore_errors=True)
+
+    def test_empty_prints_no_backups_and_no_trailing_blank(self) -> None:
+        self.bdir = _make_backup_tree([])
+        with redirect_stdout(io.StringIO()) as out:
+            cm.print_backup_list(self.bdir, lambda d: "(x)")
+        self.assertEqual(
+            out.getvalue(), "Available backups:\n\n  No backups found.\n"
+        )
+
+    def test_rows_are_newest_first_and_one_indexed(self) -> None:
+        self.bdir = _make_backup_tree(["20260101_000000", "20260202_000000"])
+        with redirect_stdout(io.StringIO()) as out:
+            cm.print_backup_list(self.bdir, lambda d: f"({d.name[:4]})")
+        self.assertEqual(
+            out.getvalue(),
+            "Available backups:\n\n"
+            "  [1] 20260202_000000 (2026)\n"
+            "  [2] 20260101_000000 (2026)\n\n",
+        )
+
+    def test_backup_file_names_sorted_and_optionally_files_only(self) -> None:
+        self.bdir = _make_backup_tree(["20260101_000000"])
+        entry = self.bdir / "20260101_000000"
+        (entry / "b.yaml").write_text("b\n")
+        (entry / "a.yaml").write_text("a\n")
+        (entry / "templates").mkdir()
+        self.assertEqual(
+            cm.backup_file_names(entry), "a.yaml, b.yaml, templates"
+        )
+        self.assertEqual(
+            cm.backup_file_names(entry, files_only=True), "a.yaml, b.yaml"
+        )
+
+
+# =============================================================
+# print_run_banner / print_upgrade_footer
+# =============================================================
+
+
+class PrintRunBannerTests(unittest.TestCase):
+    def render(self, **kw) -> str:
+        with redirect_stdout(io.StringIO()) as out:
+            cm.print_run_banner("Demo Upgrade", **kw)
+        return out.getvalue()
+
+    def test_minimal_banner_is_name_between_separators(self) -> None:
+        self.assertEqual(
+            self.render(dry_run=False, target_version=""),
+            f"{cm.DOUBLE_SEP}\n Demo Upgrade\n{cm.DOUBLE_SEP}\n",
+        )
+
+    def test_dry_run_target_and_extra_lines_in_order(self) -> None:
+        body = self.render(
+            dry_run=True,
+            target_version="1.2.3",
+            extra_lines=[" Exclude: old,test"],
+        )
+        self.assertEqual(
+            body.splitlines(),
+            [
+                cm.DOUBLE_SEP,
+                " Demo Upgrade",
+                " Mode: DRY-RUN (no files will be changed)",
+                " Target: v1.2.3",
+                " Exclude: old,test",
+                cm.DOUBLE_SEP,
+            ],
+        )
+
+
+class PrintUpgradeFooterTests(unittest.TestCase):
+    CONFIG = {"CHANGELOG_URL": "https://example.test/CHANGELOG.md"}
+
+    def render(self, **kw) -> list[str]:
+        with redirect_stdout(io.StringIO()) as out:
+            cm.print_upgrade_footer(self.CONFIG, "1.0.0", "1.1.0", **kw)
+        return out.getvalue().splitlines()
+
+    def test_default_block(self) -> None:
+        self.assertEqual(
+            self.render(next_steps=["   1. Run: helmfile diff"]),
+            [
+                "",
+                cm.DOUBLE_SEP,
+                " Upgrade complete! (1.0.0 -> 1.1.0)",
+                "",
+                f" Changelog: {self.CONFIG['CHANGELOG_URL']}",
+                "",
+                " Next steps:",
+                "   1. Run: helmfile diff",
+                "",
+                " To rollback:",
+                "   ./upgrade.py --rollback",
+                cm.DOUBLE_SEP,
+            ],
+        )
+
+    def test_extra_section_precedes_next_steps_with_blank_separator(self) -> None:
+        lines = self.render(
+            next_steps=["   1. Run: helmfile diff"],
+            extra_sections=[[" Custom templates preserved:", "   - templates/pv.yaml"]],
+        )
+        changelog = lines.index(f" Changelog: {self.CONFIG['CHANGELOG_URL']}")
+        self.assertEqual(
+            lines[changelog + 1: changelog + 5],
+            [
+                "",
+                " Custom templates preserved:",
+                "   - templates/pv.yaml",
+                "",
+            ],
+        )
+        self.assertEqual(lines[changelog + 5], " Next steps:")
+
+    def test_rollback_header_override(self) -> None:
+        lines = self.render(next_steps=[], rollback_header=" To rollback (source file only):")
+        self.assertIn(" To rollback (source file only):", lines)
+        self.assertNotIn(" To rollback:", lines)
+
+
 if __name__ == "__main__":
     unittest.main()

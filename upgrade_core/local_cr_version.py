@@ -51,8 +51,10 @@ from pathlib import Path
 from ._common import (
     DATA_BACKUP_WARNING,
     auto_prune_backups,
+    backup_file_names,
     cleanup_backups,
     now_timestamp,
+    print_backup_list,
     prompt_major_bump,
     prompt_select_backup,
     read_keep_backups_env,
@@ -101,23 +103,17 @@ def _list_backups(backup_dir: Path, values_file: str) -> None:
     ``local_cr_version`` backups always include the values file and (when present)
     Chart.yaml — no chart-pin classifier needed (``external_oci_cr_version`` sister).
     """
-    print("Available backups:")
-    print()
-    backups = sorted_backups(backup_dir)
-    if not backups:
-        print("  No backups found.")
-        return
-    values_basename = Path(values_file).name
-    for idx, d in enumerate(backups, start=1):
+
+    def describe(d: Path) -> str:
         chart_yaml = d / "Chart.yaml"
         chart_ver = _read_chart_field(chart_yaml, "appVersion") if chart_yaml.is_file() else ""
         # Fall back to chart-level `version:` when appVersion is empty.
         if not chart_ver and chart_yaml.is_file():
             chart_ver = _read_chart_field(chart_yaml, "version")
-        names = sorted(p.name for p in d.iterdir() if p.is_file())
-        files = ", ".join(names)
-        print(f"  [{idx}] {d.name} (appVersion: {chart_ver or 'unknown'}) — {files}")
-    print()
+        files = backup_file_names(d, files_only=True)
+        return f"(appVersion: {chart_ver or 'unknown'}) — {files}"
+
+    print_backup_list(backup_dir, describe)
 
 
 def _do_rollback(
