@@ -26,6 +26,7 @@ _EXCLUDED_SUBSTRINGS: tuple[str, ...] = (
     "/_optional/",
     "/scripts/upgrade-sync/",
     "/tests/python/fixtures/",
+    "/tests/fixtures/",  # standalone layout
 )
 
 # Filenames that the discovery treats as "managed upgrade scripts".

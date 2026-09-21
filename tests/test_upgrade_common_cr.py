@@ -698,13 +698,13 @@ class HandleDowngradeRollbackTests(unittest.TestCase):
             # Auto-webhook config left empty so input() prompt is skipped.
         }
 
-    def _run(self, *, operator_chart_label: str | None = None) -> str:
+    def _run(self, *, operator_chart_label: str | None = None, context: str = "") -> str:
         cfg = self._config()
         buf = io.StringIO()
         kwargs = {}
         if operator_chart_label is not None:
             kwargs["operator_chart_label"] = operator_chart_label
-        with redirect_stdout(buf):
+        with redirect_stdout(buf), mock.patch.dict(os.environ, {"KUBE_CONTEXT": context}):
             ccr.handle_downgrade_rollback(
                 cfg, Path("/tmp"), None, "8.0.0", "7.17.0", **kwargs,
             )
@@ -715,19 +715,26 @@ class HandleDowngradeRollbackTests(unittest.TestCase):
         self.assertIn("WARNING: This is a version downgrade (8.0.0 -> 7.17.0).", out)
         self.assertIn("Operator admission webhooks typically block CR version downgrades.", out)
         self.assertIn("To apply this rollback manually:", out)
-        self.assertIn("5. Recreate webhook: cd <operator-dir> && helmfile sync", out)
+        self.assertIn("5. Recreate webhook: cd <operator-dir> && helmfile --kube-context <kube-context> sync", out)
         # Step 7 uses COMPONENT_LABEL in both the resource and the jsonpath wait.
         self.assertIn(
-            "7. Wait for CR: kubectl -n <ns> wait elasticsearch/elasticsearch",
+            "7. Wait for CR: kubectl --context <kube-context> -n <ns> wait elasticsearch/elasticsearch",
             out,
         )
         self.assertIn("--for=jsonpath='{.status.phase}'=Ready --timeout=300s", out)
 
     def test_eck_operator_dir_label(self) -> None:
         out = self._run(operator_chart_label="eck-operator-dir")
-        self.assertIn("5. Recreate webhook: cd <eck-operator-dir> && helmfile sync", out)
-        # Other steps unchanged.
-        self.assertIn("4. helmfile apply", out)
+        self.assertIn("5. Recreate webhook: cd <eck-operator-dir> && helmfile --kube-context <kube-context> sync", out)
+        self.assertIn("4. helmfile --kube-context <kube-context> apply", out)
+
+    def test_every_step_names_the_set_context(self) -> None:
+        out = self._run(context="my-ctx")
+        steps = [line for line in out.splitlines() if line.lstrip().startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "helm"))]
+        self.assertEqual(len(steps), 8)
+        for line in steps:
+            self.assertRegex(line, r"--(kube-)?context my-ctx ")
+        self.assertNotIn("<kube-context>", out)
 
     def test_step_numbering_and_order(self) -> None:
         out = self._run()

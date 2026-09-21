@@ -44,6 +44,7 @@ class FindManagedFilesTests(unittest.TestCase):
         _seed_file(self.repo / "_optional" / "future" / "upgrade.py", "")
         _seed_file(self.repo / "scripts" / "upgrade-sync" / "upgrade.py", "")
         _seed_file(self.repo / "tests" / "python" / "fixtures" / "upgrade.py", "")
+        _seed_file(self.repo / "tests" / "fixtures" / "cr" / "upgrade.sh", "")
         result = discovery.find_managed_files(self.repo)
         rels = [str(p.relative_to(self.repo)) for p in result]
         self.assertEqual(rels, ["comp-a/upgrade.py"])

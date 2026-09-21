@@ -932,16 +932,18 @@ def handle_downgrade_rollback(
         if auto_apply.lower().startswith("y"):
             rollback_with_webhook_handling(config, chart_dir, helmfile_path)
             return
+    # Every step names the context too: copy-pasting these must not fall back to the current one.
+    ctx = kube_context() or "<kube-context>"
     print()
     print("  To apply this rollback manually:")
-    print(f"    1. kubectl -n {config.get('CR_OPERATOR_NS', '')} scale sts {config.get('CR_OPERATOR_STS', '')} --replicas=0")
-    print(f"    2. kubectl delete validatingwebhookconfiguration {config.get('CR_WEBHOOK_NAME', '')} --ignore-not-found")
-    print("    3. If 'helm list -n <ns>' shows status=failed:")
-    print("         helm rollback <release> <last-good-revision> -n <ns>")
-    print("    4. helmfile apply")
-    print(f"    5. Recreate webhook: cd <{operator_chart_label}> && helmfile sync")
-    print(f"    6. kubectl -n {config.get('CR_OPERATOR_NS', '')} scale sts {config.get('CR_OPERATOR_STS', '')} --replicas=1")
+    print(f"    1. kubectl --context {ctx} -n {config.get('CR_OPERATOR_NS', '')} scale sts {config.get('CR_OPERATOR_STS', '')} --replicas=0")
+    print(f"    2. kubectl --context {ctx} delete validatingwebhookconfiguration {config.get('CR_WEBHOOK_NAME', '')} --ignore-not-found")
+    print(f"    3. If 'helm --kube-context {ctx} list -n <ns>' shows status=failed:")
+    print(f"         helm --kube-context {ctx} rollback <release> <last-good-revision> -n <ns>")
+    print(f"    4. helmfile --kube-context {ctx} apply")
+    print(f"    5. Recreate webhook: cd <{operator_chart_label}> && helmfile --kube-context {ctx} sync")
+    print(f"    6. kubectl --context {ctx} -n {config.get('CR_OPERATOR_NS', '')} scale sts {config.get('CR_OPERATOR_STS', '')} --replicas=1")
     print(
-        f"    7. Wait for CR: kubectl -n <ns> wait {config['COMPONENT_LABEL']}/"
+        f"    7. Wait for CR: kubectl --context {ctx} -n <ns> wait {config['COMPONENT_LABEL']}/"
         f"{config['COMPONENT_LABEL']} --for=jsonpath='{{.status.phase}}'=Ready --timeout=300s"
     )
