@@ -281,7 +281,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog=Path(argv[0]).name,
         description=(
-            "Scans all managed upgrade.sh files and reports charts that have "
+            "Scans all managed upgrade.py files and reports charts that have "
             "an upstream upgrade available. Read-only; no files are modified."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

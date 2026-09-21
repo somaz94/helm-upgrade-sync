@@ -349,13 +349,14 @@ class CliTests(unittest.TestCase):
             self.assertEqual(rc, 0, flag)
             self.assertIn("--cleanup", buf.getvalue())
 
-    def test_unknown_command_rc_zero_bash_parity(self) -> None:
+    def test_unknown_command_is_usage_error_on_stderr(self) -> None:
         _, sp = self._make_repo()
-        buf = io.StringIO()
-        with redirect_stdout(buf):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
             rc = mb.main(["--bogus"], script_path=sp)
-        self.assertEqual(rc, 0)
-        self.assertIn("Unknown command: --bogus", buf.getvalue())
+        self.assertEqual(rc, 2)
+        self.assertIn("Unknown command: --bogus", err.getvalue())
+        self.assertEqual(out.getvalue(), "")
 
     def test_total_size_on_empty_repo(self) -> None:
         root, sp = self._make_repo()
@@ -389,6 +390,15 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()), redirect_stderr(buf_err):
             rc = mb.main(["--cleanup", "--keep", "abc"], script_path=sp)
         self.assertEqual(rc, 2)
+
+    def test_cleanup_unknown_option_is_usage_error_on_stderr(self) -> None:
+        _, sp = self._make_repo()
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = mb.main(["--cleanup", "--kep", "3"], script_path=sp)
+        self.assertEqual(rc, 2)
+        self.assertIn("Unknown option: --kep", err.getvalue())
+        self.assertEqual(out.getvalue(), "")
 
 
 # ---------------------------------------------------------------------------

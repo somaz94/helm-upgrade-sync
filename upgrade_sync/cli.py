@@ -42,9 +42,9 @@ Examples:
 """
 
 
-def _print_usage() -> None:
+def _print_usage(stream=None) -> None:
     """Print the usage banner verbatim (no auto-formatting)."""
-    sys.stdout.write(_USAGE)
+    (stream or sys.stdout).write(_USAGE)
 
 
 def main(argv: list[str] | None = None, script_path: str | None = None) -> int:
@@ -82,10 +82,8 @@ def main(argv: list[str] | None = None, script_path: str | None = None) -> int:
         file_arg = args[1] if len(args) >= 2 else None
         return cmd_print_expected(repo_root, templates_dir, file_arg)
 
-    # Match the bash sync.sh contract — unknown commands echo the message
-    # and fall through to the usage banner, but the script still exits 0.
-    # CI yamls relied on this for argv typos; preserve byte parity.
-    print(f"Unknown command: {cmd}")
-    print()
-    _print_usage()
-    return 0
+    # Exit 2 (usage error), so a mistyped subcommand in CI fails instead of passing silently.
+    print(f"Unknown command: {cmd}", file=sys.stderr)
+    print(file=sys.stderr)
+    _print_usage(sys.stderr)
+    return 2

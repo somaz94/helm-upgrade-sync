@@ -270,8 +270,8 @@ Examples:
 """
 
 
-def _print_usage() -> None:
-    sys.stdout.write(_USAGE)
+def _print_usage(stream=None) -> None:
+    (stream or sys.stdout).write(_USAGE)
 
 
 def main(argv: list[str] | None = None, script_path: str | None = None) -> int:
@@ -316,21 +316,19 @@ def main(argv: list[str] | None = None, script_path: str | None = None) -> int:
                     return 2
                 i += 2
             else:
-                print(f"Unknown option: {args[i]}")
-                print()
-                _print_usage()
-                return 0
+                print(f"Unknown option: {args[i]}", file=sys.stderr)
+                print(file=sys.stderr)
+                _print_usage(sys.stderr)
+                return 2
         return cmd_cleanup(repo_root, keep)
     if cmd == "--purge":
         return cmd_purge(repo_root)
 
-    # Match bash sync.sh / manage-backups.sh — unknown command echoes the
-    # message and falls through to usage but still exits 0. Preserve for
-    # CLI byte parity even though CI typos go unnoticed.
-    print(f"Unknown command: {cmd}")
-    print()
-    _print_usage()
-    return 0
+    # Exit 2 (usage error), so a mistyped subcommand in CI fails instead of passing silently.
+    print(f"Unknown command: {cmd}", file=sys.stderr)
+    print(file=sys.stderr)
+    _print_usage(sys.stderr)
+    return 2
 
 
 __all__ = [

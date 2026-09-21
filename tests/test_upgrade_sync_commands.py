@@ -288,12 +288,14 @@ class CliTests(unittest.TestCase):
             self.assertEqual(rc, 0, flag)
             self.assertIn("--check", buf.getvalue())
 
-    def test_unknown_command_prints_message_and_rc0(self) -> None:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
+    def test_unknown_command_is_usage_error_on_stderr(self) -> None:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
             rc = cli.main(["--bogus"], script_path=self.sync_py)
-        self.assertEqual(rc, 0)
-        self.assertIn("Unknown command: --bogus", buf.getvalue())
+        self.assertEqual(rc, 2)
+        self.assertIn("Unknown command: --bogus", err.getvalue())
+        self.assertIn("Usage", err.getvalue())
+        self.assertEqual(out.getvalue(), "")
 
     def test_check_dispatches(self) -> None:
         _seed_consumer(self.root, "comp/upgrade.py", header=True)

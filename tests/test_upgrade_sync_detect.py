@@ -64,6 +64,19 @@ class DetectTemplateTests(unittest.TestCase):
         body = "# nothing of interest here\nSCRIPT_NAME=foo\n"
         self.assertEqual(detect.detect_template(_seed(self.tmp, body)), "external-standard")
 
+    def test_python_consumer_detected_by_upgrade_core_import(self) -> None:
+        body = 'CONFIG = {\n    "VERSION_SOURCE": "github-releases",\n}\nfrom upgrade_core.argocd_pin import run  # noqa: E402\n'
+        self.assertEqual(detect.detect_template(_seed(self.tmp, body)), "argocd-pin")
+
+    def test_python_import_wins_over_legacy_probes(self) -> None:
+        # A dict-form CONFIG never matches the ^KEY= probes; the import decides.
+        body = '    "HELM_CHART": "oci://example.com/x",\nfrom upgrade_core.external_oci_with_mirror import run\n'
+        self.assertEqual(detect.detect_template(_seed(self.tmp, body)), "external-oci-with-mirror")
+
+    def test_unknown_upgrade_core_module_falls_through(self) -> None:
+        body = "from upgrade_core._common import run\n"
+        self.assertEqual(detect.detect_template(_seed(self.tmp, body)), "external-standard")
+
 
 if __name__ == "__main__":
     unittest.main()

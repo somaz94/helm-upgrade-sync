@@ -21,7 +21,6 @@ Test design:
 
 from __future__ import annotations
 
-import importlib.util
 import io
 import os
 import shutil
@@ -32,7 +31,6 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from types import ModuleType
 from unittest import mock
 
 

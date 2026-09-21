@@ -260,11 +260,6 @@ def read_helmfile_namespace(helmfile_path: Path | None) -> str:
     return ""
 
 
-# Alias kept for clarity in the CR templates call sites that read this as "the
-# release namespace from helmfile."
-get_release_namespace = read_helmfile_namespace
-
-
 def check_cluster_health(
     component_label: str, helmfile_path: Path | None
 ) -> bool:

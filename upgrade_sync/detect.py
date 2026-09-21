@@ -11,8 +11,22 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# Probe patterns mirror the bash ``grep -qE`` checks. The order matters —
-# every cascade in detect_template falls through to the next on a miss.
+# Python consumers name their template by the upgrade_core module they import.
+_PY_ENTRYPOINT_RE = re.compile(r"^from upgrade_core\.([a-z_]+) import run\b", re.MULTILINE)
+_KNOWN_TEMPLATES = frozenset({
+    "ansible-github-release",
+    "argocd-pin",
+    "external-oci",
+    "external-oci-cr-version",
+    "external-oci-with-mirror",
+    "external-standard",
+    "external-with-image-tag",
+    "local-cr-version",
+    "local-with-templates",
+})
+
+# Legacy ``.sh`` probes. The order matters — every cascade in detect_template
+# falls through to the next on a miss.
 _OCI_CHART_RE = re.compile(r'^HELM_CHART=("|\')?oci://', re.MULTILINE)
 _DO_MIRROR_RE = re.compile(r"^do_mirror\(\)", re.MULTILINE)
 _GITHUB_REPO_RE = re.compile(r"^GITHUB_REPO=", re.MULTILINE)
@@ -25,7 +39,9 @@ _IMAGE_TAG_RE = re.compile(r"Update image tags in values files")
 def detect_template(upgrade_script: Path) -> str:
     """Return the template name implied by the file's body.
 
-    Cascade order (mirrors the bash original):
+    A Python consumer is identified by its ``from upgrade_core.<module> import
+    run`` line (``<module>`` with ``_`` → ``-`` is the template name). Legacy
+    ``.sh`` bodies fall through to the content cascade:
 
     1. ``HELM_CHART="oci://..."`` + ``do_mirror()`` → ``external-oci-with-mirror``
     2. ``HELM_CHART="oci://..."`` alone           → ``external-oci``
@@ -37,6 +53,9 @@ def detect_template(upgrade_script: Path) -> str:
     8. fallback                                   → ``external-standard``
     """
     body = upgrade_script.read_text(encoding="utf-8")
+    m = _PY_ENTRYPOINT_RE.search(body)
+    if m and m.group(1).replace("_", "-") in _KNOWN_TEMPLATES:
+        return m.group(1).replace("_", "-")
     if _OCI_CHART_RE.search(body):
         if _DO_MIRROR_RE.search(body):
             return "external-oci-with-mirror"
