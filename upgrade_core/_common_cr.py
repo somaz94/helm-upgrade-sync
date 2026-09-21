@@ -222,6 +222,106 @@ def kubectl_available() -> bool:
     return shutil.which("kubectl") is not None
 
 
+# -------------------------------------------------------------
+# kube-context gate
+# -------------------------------------------------------------
+#
+# Every cluster call in this module goes through :func:`kubectl_run` /
+# :func:`helm_run`, so the target context cannot be omitted by an edit that adds
+# a new call site later.
+#
+# CR components commonly carry identical ``CR_OPERATOR_NS``, ``CR_OPERATOR_STS``
+# and ``CR_WEBHOOK_NAME`` values on every cluster they run on. A bare
+# ``kubectl`` therefore SUCCEEDS against whichever context happens to be
+# current, so a rollback aimed at one cluster can scale down another cluster's
+# operator and delete its admission webhook -- silently, and with exit code 0.
+#
+# Deliberately no default and no fallback to the current context. A read that
+# cannot name its target is refused and announced; a write is refused outright.
+# Context names are LOCAL kubeconfig aliases rather than a property of a
+# cluster, so nothing here may hardcode one -- the operator supplies it.
+
+
+def kube_context() -> str:
+    """Return the operator-supplied target kube-context, or "" when unset."""
+    return os.environ.get("KUBE_CONTEXT", "").strip()
+
+
+def _refuse_without_context(argv: list[str]) -> subprocess.CompletedProcess:
+    """Announce a refused cluster call and return a synthetic rc=2 result.
+
+    Returning a failure rather than raising lets every existing read-path
+    passthrough (``rc.returncode != 0`` / empty stdout) degrade the way it
+    already does for an unreachable cluster -- but loudly, never silently.
+    """
+    print(
+        f"  REFUSED: KUBE_CONTEXT is not set, so `{' '.join(argv[:3])} ...` "
+        f"did not run (no fallback to the current context)."
+    )
+    return subprocess.CompletedProcess(args=argv, returncode=2, stdout="", stderr="")
+
+
+def kubectl_run(
+    *args: str, capture_output: bool = True, **kwargs
+) -> subprocess.CompletedProcess:
+    """Run ``kubectl --context <KUBE_CONTEXT> <args>``; refuse when unset.
+
+    Single chokepoint for every kubectl call in this module. Always
+    ``check=False`` + ``text=True``; pass ``capture_output=False`` to let a
+    long-running step stream to the console.
+    """
+    ctx = kube_context()
+    if not ctx:
+        return _refuse_without_context(["kubectl", *args])
+    return subprocess.run(
+        ["kubectl", "--context", ctx, *args],
+        capture_output=capture_output,
+        text=True,
+        check=False,
+        **kwargs,
+    )
+
+
+def helm_run(
+    *args: str, capture_output: bool = True, **kwargs
+) -> subprocess.CompletedProcess:
+    """Run ``helm --kube-context <KUBE_CONTEXT> <args>``; refuse when unset.
+
+    Only for helm sub-commands that talk to a cluster (``status`` / ``history``
+    / ``rollback``). Registry-only calls (``pull`` / ``template`` / ``search``)
+    reach no cluster and stay on plain :func:`subprocess.run` elsewhere.
+    """
+    ctx = kube_context()
+    if not ctx:
+        return _refuse_without_context(["helm", *args])
+    return subprocess.run(
+        ["helm", "--kube-context", ctx, *args],
+        capture_output=capture_output,
+        text=True,
+        check=False,
+        **kwargs,
+    )
+
+
+def require_kube_context(action: str) -> str:
+    """Return the target kube-context, or exit 2. Use before any cluster WRITE.
+
+    A read may degrade to "not verified"; a write may not. ``action`` names the
+    operation in the refusal so the operator knows what was blocked.
+    """
+    ctx = kube_context()
+    if ctx:
+        return ctx
+    print()
+    print(f"ERROR: KUBE_CONTEXT is not set -- refusing to {action}.")
+    print("  Set KUBE_CONTEXT to the kube-context this chart targets; the")
+    print("  current context is never used implicitly.")
+    print("  Name the target explicitly, e.g.:")
+    print("    KUBE_CONTEXT=\"$(kubectl config current-context)\" ./upgrade.py ...")
+    print("  Contexts available here: kubectl config get-contexts -o name")
+    raise SystemExit(2)
+
+
 def kubectl_jsonpath(ns: str, kind: str, name: str, path: str) -> str:
     """Return ``kubectl get <kind> <name> -n <ns> -o jsonpath=<path>`` stdout.
 
@@ -230,14 +330,9 @@ def kubectl_jsonpath(ns: str, kind: str, name: str, path: str) -> str:
     ``check=False`` + ``capture_output=True``. Empty string on any
     error.
     """
-    rc = subprocess.run(
-        [
-            "kubectl", "-n", ns, "get", kind, name,
-            "-o", f"jsonpath={{{path}}}",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    rc = kubectl_run(
+        "-n", ns, "get", kind, name,
+        "-o", f"jsonpath={{{path}}}",
     )
     return rc.stdout.strip()
 
@@ -279,11 +374,7 @@ def check_cluster_health(
         print("  Skipped (namespace not readable from helmfile).")
         return True
     # First check CR existence — first install case.
-    rc = subprocess.run(
-        ["kubectl", "-n", ns, "get", component_label, component_label],
-        capture_output=True,
-        check=False,
-    )
+    rc = kubectl_run("-n", ns, "get", component_label, component_label)
     if rc.returncode != 0:
         print(f"  CR not found in ns/{ns} (first install?). Skipping health check.")
         return True
@@ -312,6 +403,23 @@ def check_cluster_health(
     return not abort
 
 
+def find_cr_namespace(kind: str, name: str) -> str:
+    """Return the namespace of ``<kind>/<name>`` found cluster-wide, or "".
+
+    Fallback for components that own no ``helmfile.yaml`` (e.g. chart pins
+    kept in ``argocd/<release>.yaml`` markers), which leaves
+    :func:`read_helmfile_namespace` with nothing to read. Searching by
+    name avoids threading a second path argument through every caller and
+    works for helmfile- and ArgoCD-managed components alike.
+    """
+    rc = kubectl_run(
+        "get", kind, "--all-namespaces",
+        "--field-selector", f"metadata.name={name}",
+        "-o", "jsonpath={.items[0].metadata.namespace}",
+    )
+    return rc.stdout.strip()
+
+
 def check_dependency_version(
     target: str,
     dep_kind: str,
@@ -323,16 +431,36 @@ def check_dependency_version(
 
     Used by Kibana (depends on Elasticsearch). Empty dep_kind/name →
     noop (True). Missing kubectl or unreachable dep CR → noop (True).
+
+    Every passthrough here MUST announce itself. A component without a
+    ``helmfile.yaml`` (ArgoCD-managed) makes the namespace lookup return "",
+    and a silent ``return True`` then prints the "Checking dependency CR
+    version constraint..." header followed by a blank line — which reads
+    exactly like a pass. A guard that cannot run must say that it did not run,
+    otherwise it is worse than no guard at all.
     """
     if not dep_kind or not dep_name:
         return True
     if not kubectl_available():
+        print("  SKIPPED: kubectl not available — constraint NOT verified.")
         return True
     ns = read_helmfile_namespace(helmfile_path)
     if not ns:
+        # ArgoCD-managed components have no helmfile; locate the dep CR by name.
+        ns = find_cr_namespace(dep_kind, dep_name)
+    if not ns:
+        print(
+            f"  SKIPPED: namespace for {dep_kind}/{dep_name} unresolved "
+            f"(no helmfile, and no such CR found cluster-wide) — "
+            f"constraint NOT verified."
+        )
         return True
     dep_ver = kubectl_jsonpath(ns, dep_kind, dep_name, ".spec.version")
     if not dep_ver:
+        print(
+            f"  SKIPPED: {dep_kind}/{dep_name} in ns/{ns} has no readable "
+            f".spec.version — constraint NOT verified."
+        )
         return True
     print(f"  Dependency {dep_kind}/{dep_name} version: {dep_ver}")
     cmp = semver_compare(target, dep_ver)
@@ -397,13 +525,9 @@ def wait_for_operator_ready(
     if not kubectl_available():
         return True
     print(f"    Waiting up to {timeout}s for operator pod to become Ready...")
-    rc = subprocess.run(
-        [
-            "kubectl", "-n", operator_ns, "wait", "--for=condition=Ready",
-            f"pod/{operator_sts}-0", f"--timeout={timeout}s",
-        ],
-        capture_output=True,
-        check=False,
+    rc = kubectl_run(
+        "-n", operator_ns, "wait", "--for=condition=Ready",
+        f"pod/{operator_sts}-0", f"--timeout={timeout}s",
     )
     if rc.returncode != 0:
         print(f"    WARN: operator pod did not become Ready within {timeout}s.")
@@ -432,12 +556,7 @@ def get_live_cr_version(
 
 def read_helm_release_status(release_name: str, release_ns: str) -> str:
     """Return ``helm status -o json`` ``info.status`` or empty string."""
-    rc = subprocess.run(
-        ["helm", "status", release_name, "-n", release_ns, "-o", "json"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    rc = helm_run("status", release_name, "-n", release_ns, "-o", "json")
     if rc.returncode != 0 or not rc.stdout.strip():
         return ""
     try:
@@ -449,12 +568,7 @@ def read_helm_release_status(release_name: str, release_ns: str) -> str:
 
 def read_last_good_revision(release_name: str, release_ns: str) -> str:
     """Scan ``helm history -o json`` for the newest deployed/superseded rev."""
-    rc = subprocess.run(
-        ["helm", "history", release_name, "-n", release_ns, "-o", "json"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    rc = helm_run("history", release_name, "-n", release_ns, "-o", "json")
     if rc.returncode != 0 or not rc.stdout.strip():
         return ""
     try:
@@ -685,6 +799,12 @@ def rollback_with_webhook_handling(
     Reads the operator + webhook + chart dir from ``config`` so the
     same helper drives both ``local_cr_version`` and ``external_oci_cr_version`` rollback paths.
     """
+    # Hard gate BEFORE step 1: this flow scales an operator StatefulSet to zero
+    # and deletes an admission webhook whose name may be identical on every
+    # cluster. A read may degrade to "not verified"; these writes may not.
+    kube_ctx = require_kube_context("run the CR-downgrade rollback")
+    print(f"  Target kube-context: {kube_ctx}")
+
     release_name, release_ns = read_helmfile_release_metadata(helmfile_path)
     operator_ns = config["CR_OPERATOR_NS"]
     operator_sts = config["CR_OPERATOR_STS"]
@@ -694,23 +814,19 @@ def rollback_with_webhook_handling(
 
     print()
     print(f"  [1/7] Scaling down operator ({operator_ns}/{operator_sts})...")
-    subprocess.run(
-        ["kubectl", "-n", operator_ns, "scale", "statefulset", operator_sts, "--replicas=0"],
-        check=False,
+    kubectl_run(
+        "-n", operator_ns, "scale", "statefulset", operator_sts, "--replicas=0",
+        capture_output=False,
     )
-    subprocess.run(
-        [
-            "kubectl", "-n", operator_ns, "wait", "--for=delete",
-            f"pod/{operator_sts}-0", "--timeout=60s",
-        ],
-        capture_output=True,
-        check=False,
+    kubectl_run(
+        "-n", operator_ns, "wait", "--for=delete",
+        f"pod/{operator_sts}-0", "--timeout=60s",
     )
 
     print(f"  [2/7] Removing admission webhook ({webhook})...")
-    subprocess.run(
-        ["kubectl", "delete", "validatingwebhookconfiguration", webhook, "--ignore-not-found"],
-        check=False,
+    kubectl_run(
+        "delete", "validatingwebhookconfiguration", webhook, "--ignore-not-found",
+        capture_output=False,
     )
 
     print("  [3/7] Recovering Helm release state...")
@@ -723,9 +839,9 @@ def rollback_with_webhook_handling(
             )
             last_good = read_last_good_revision(release_name, release_ns)
             if last_good:
-                subprocess.run(
-                    ["helm", "rollback", release_name, last_good, "-n", release_ns],
-                    check=False,
+                helm_run(
+                    "rollback", release_name, last_good, "-n", release_ns,
+                    capture_output=False,
                 )
                 print(f"    Rolled back to revision {last_good}.")
             else:
@@ -736,7 +852,9 @@ def rollback_with_webhook_handling(
         print("    WARN: could not read release info from helmfile. Skipping Helm recovery.")
 
     print("  [4/7] Applying rollback via helmfile...")
-    subprocess.run(["helmfile", "apply"], cwd=chart_dir, check=False)
+    subprocess.run(
+        ["helmfile", "--kube-context", kube_ctx, "apply"], cwd=chart_dir, check=False
+    )
 
     print("  [5/7] Recreating webhook via operator helmfile sync...")
     operator_dir = ""
@@ -754,7 +872,11 @@ def rollback_with_webhook_handling(
                 break
             search_base = search_base.parent
     if operator_dir:
-        subprocess.run(["helmfile", "sync"], cwd=Path(operator_dir), check=False)
+        subprocess.run(
+            ["helmfile", "--kube-context", kube_ctx, "sync"],
+            cwd=Path(operator_dir),
+            check=False,
+        )
     elif operator_chart_dir:
         print(
             f"    WARN: operator chart dir '{operator_chart_dir}' not found. "
@@ -764,9 +886,9 @@ def rollback_with_webhook_handling(
         print("    SKIP: CR_OPERATOR_CHART_DIR not configured. Recreate the webhook manually.")
 
     print("  [6/7] Scaling operator back up and waiting for Ready...")
-    subprocess.run(
-        ["kubectl", "-n", operator_ns, "scale", "statefulset", operator_sts, "--replicas=1"],
-        check=False,
+    kubectl_run(
+        "-n", operator_ns, "scale", "statefulset", operator_sts, "--replicas=1",
+        capture_output=False,
     )
     wait_for_operator_ready(operator_ns, operator_sts, DEFAULT_OPERATOR_READY_TIMEOUT)
 

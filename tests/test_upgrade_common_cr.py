@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,117 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _loader import load  # noqa: E402
 
 ccr = load("upgrade_core._common_cr")
+
+TEST_KUBE_CONTEXT = "test-ctx"
+
+
+class KubeContextEnvMixin:
+    """Provide a target kube-context to tests that exercise a cluster call.
+
+    Without it every such call is refused by the kube-context gate and returns
+    a synthetic rc=2 with empty stdout -- which silently *matches* what several
+    of the negative assertions below expect, so the test would pass while
+    covering nothing. The gate itself is covered by KubeContextGateTests.
+    """
+
+    def setUp(self) -> None:  # noqa: N802 - unittest naming
+        super().setUp()
+        patcher = mock.patch.dict(
+            os.environ, {"KUBE_CONTEXT": TEST_KUBE_CONTEXT}, clear=False
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+# =============================================================
+# kube-context gate
+# =============================================================
+
+
+class KubeContextGateTests(unittest.TestCase):
+    """The gate that keeps a cluster call from landing on the wrong cluster.
+
+    CR components commonly carry identically named CRs, operator StatefulSets
+    and admission webhooks on every cluster, so a call without an explicit
+    context succeeds against whichever context happens to be current.
+    """
+
+    @staticmethod
+    def _ok() -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="x", stderr="")
+
+    def test_kube_context_reads_env_and_strips(self) -> None:
+        with mock.patch.dict(os.environ, {"KUBE_CONTEXT": "  ctx-a  "}, clear=False):
+            self.assertEqual(ccr.kube_context(), "ctx-a")
+
+    def test_kube_context_empty_when_unset(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(ccr.kube_context(), "")
+
+    def test_kubectl_run_injects_context(self) -> None:
+        with mock.patch.dict(os.environ, {"KUBE_CONTEXT": "ctx-a"}, clear=False):
+            with mock.patch.object(
+                ccr.subprocess, "run", return_value=self._ok()
+            ) as m_run:
+                ccr.kubectl_run("get", "pods")
+        self.assertEqual(
+            m_run.call_args[0][0], ["kubectl", "--context", "ctx-a", "get", "pods"]
+        )
+
+    def test_helm_run_injects_context(self) -> None:
+        with mock.patch.dict(os.environ, {"KUBE_CONTEXT": "ctx-a"}, clear=False):
+            with mock.patch.object(
+                ccr.subprocess, "run", return_value=self._ok()
+            ) as m_run:
+                ccr.helm_run("status", "rel")
+        self.assertEqual(
+            m_run.call_args[0][0], ["helm", "--kube-context", "ctx-a", "status", "rel"]
+        )
+
+    def test_kubectl_run_refuses_without_context(self) -> None:
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(ccr.subprocess, "run") as m_run:
+                with redirect_stdout(buf):
+                    rc = ccr.kubectl_run("delete", "ns", "logging")
+        m_run.assert_not_called()
+        self.assertEqual(rc.returncode, 2)
+        self.assertEqual(rc.stdout, "")
+        # A refusal that does not announce itself is worse than no gate at all.
+        self.assertIn("REFUSED", buf.getvalue())
+        self.assertIn("KUBE_CONTEXT", buf.getvalue())
+
+    def test_helm_run_refuses_without_context(self) -> None:
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(ccr.subprocess, "run") as m_run:
+                with redirect_stdout(buf):
+                    rc = ccr.helm_run("rollback", "rel", "3")
+        m_run.assert_not_called()
+        self.assertEqual(rc.returncode, 2)
+        self.assertIn("REFUSED", buf.getvalue())
+
+    def test_require_kube_context_returns_context(self) -> None:
+        with mock.patch.dict(os.environ, {"KUBE_CONTEXT": "ctx-a"}, clear=False):
+            self.assertEqual(ccr.require_kube_context("do a thing"), "ctx-a")
+
+    def test_require_kube_context_exits_2_when_unset(self) -> None:
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(buf):
+                with self.assertRaises(SystemExit) as cm:
+                    ccr.require_kube_context("run the CR-downgrade rollback")
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("run the CR-downgrade rollback", buf.getvalue())
+
+    def test_refusal_names_no_hardcoded_context(self) -> None:
+        """Context names are local kubeconfig aliases -- never bake one in."""
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(buf):
+                with self.assertRaises(SystemExit):
+                    ccr.require_kube_context("do a thing")
+        self.assertIn("kubectl config get-contexts", buf.getvalue())
 
 
 # =============================================================
@@ -282,7 +394,7 @@ class VerifyImageExistsTests(unittest.TestCase):
 # =============================================================
 
 
-class CheckDependencyVersionTests(unittest.TestCase):
+class CheckDependencyVersionTests(KubeContextEnvMixin, unittest.TestCase):
     def test_empty_dep_returns_true(self) -> None:
         with redirect_stdout(io.StringIO()):
             self.assertTrue(
@@ -336,12 +448,113 @@ class CheckDependencyVersionTests(unittest.TestCase):
                         )
 
 
+class DependencyGuardSilentPassthroughTests(unittest.TestCase):
+    """Regression: every passthrough must announce that it did not verify.
+
+    A component without ``helmfile.yaml`` (ArgoCD-managed) makes
+    ``read_helmfile_namespace`` return "", and the guard used to return True
+    printing nothing. The pre-existing tests all mocked the namespace to
+    "logging", so none of them ever walked this path.
+    """
+
+    def test_no_helmfile_falls_back_to_cluster_lookup(self) -> None:
+        """With no helmfile, the dep CR is located by name and the guard RUNS."""
+        with mock.patch.object(ccr, "kubectl_available", return_value=True):
+            with mock.patch.object(ccr, "read_helmfile_namespace", return_value=""):
+                with mock.patch.object(
+                    ccr, "find_cr_namespace", return_value="logging"
+                ) as m_find:
+                    with mock.patch.object(
+                        ccr, "kubectl_jsonpath", return_value="9.5.1"
+                    ):
+                        buf = io.StringIO()
+                        with redirect_stdout(buf):
+                            # 9.9.9 > 9.5.1 → must FAIL, not silently pass.
+                            result = ccr.check_dependency_version(
+                                target="9.9.9",
+                                dep_kind="elasticsearch",
+                                dep_name="elasticsearch",
+                                helmfile_path=None,
+                                component_label="kibana",
+                            )
+        self.assertFalse(result)
+        self.assertIn("is HIGHER", buf.getvalue())
+        m_find.assert_called_once_with("elasticsearch", "elasticsearch")
+
+    def test_unresolvable_namespace_says_not_verified(self) -> None:
+        with mock.patch.object(ccr, "kubectl_available", return_value=True):
+            with mock.patch.object(ccr, "read_helmfile_namespace", return_value=""):
+                with mock.patch.object(ccr, "find_cr_namespace", return_value=""):
+                    buf = io.StringIO()
+                    with redirect_stdout(buf):
+                        result = ccr.check_dependency_version(
+                            target="9.9.9",
+                            dep_kind="elasticsearch",
+                            dep_name="elasticsearch",
+                            helmfile_path=None,
+                            component_label="kibana",
+                        )
+        self.assertTrue(result)  # still a passthrough...
+        self.assertIn("NOT verified", buf.getvalue())  # ...but a loud one.
+
+    def test_missing_kubectl_says_not_verified(self) -> None:
+        with mock.patch.object(ccr, "kubectl_available", return_value=False):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = ccr.check_dependency_version(
+                    target="9.9.9",
+                    dep_kind="elasticsearch",
+                    dep_name="elasticsearch",
+                    helmfile_path=None,
+                    component_label="kibana",
+                )
+        self.assertTrue(result)
+        self.assertIn("NOT verified", buf.getvalue())
+
+    def test_unreadable_dep_version_says_not_verified(self) -> None:
+        with mock.patch.object(ccr, "kubectl_available", return_value=True):
+            with mock.patch.object(
+                ccr, "read_helmfile_namespace", return_value="logging"
+            ):
+                with mock.patch.object(ccr, "kubectl_jsonpath", return_value=""):
+                    buf = io.StringIO()
+                    with redirect_stdout(buf):
+                        result = ccr.check_dependency_version(
+                            target="9.9.9",
+                            dep_kind="elasticsearch",
+                            dep_name="elasticsearch",
+                            helmfile_path=None,
+                            component_label="kibana",
+                        )
+        self.assertTrue(result)
+        self.assertIn("NOT verified", buf.getvalue())
+
+
+class FindCrNamespaceTests(KubeContextEnvMixin, unittest.TestCase):
+    def test_returns_namespace_from_field_selector_lookup(self) -> None:
+        rc = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="logging\n", stderr=""
+        )
+        with mock.patch.object(ccr.subprocess, "run", return_value=rc) as m_run:
+            got = ccr.find_cr_namespace("elasticsearch", "elasticsearch")
+        self.assertEqual(got, "logging")
+        argv = m_run.call_args[0][0]
+        self.assertIn("--all-namespaces", argv)
+        self.assertIn("metadata.name=elasticsearch", argv)
+        self.assertEqual(argv[:3], ["kubectl", "--context", TEST_KUBE_CONTEXT])
+
+    def test_missing_cr_returns_empty(self) -> None:
+        rc = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="x")
+        with mock.patch.object(ccr.subprocess, "run", return_value=rc):
+            self.assertEqual(ccr.find_cr_namespace("elasticsearch", "nope"), "")
+
+
 # =============================================================
 # kubectl_jsonpath (N3)
 # =============================================================
 
 
-class KubectlJsonpathTests(unittest.TestCase):
+class KubectlJsonpathTests(KubeContextEnvMixin, unittest.TestCase):
     def test_returns_stdout_stripped(self) -> None:
         rc = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="Ready\n", stderr=""
@@ -422,7 +635,7 @@ class ReadHelmfileReleaseMetadataTests(unittest.TestCase):
 # =============================================================
 
 
-class ReadHelmReleaseStatusTests(unittest.TestCase):
+class ReadHelmReleaseStatusTests(KubeContextEnvMixin, unittest.TestCase):
     def test_returns_status_from_json(self) -> None:
         rc = subprocess.CompletedProcess(
             args=[],
@@ -446,7 +659,7 @@ class ReadHelmReleaseStatusTests(unittest.TestCase):
             self.assertEqual(ccr.read_helm_release_status("rel", "ns"), "")
 
 
-class ReadLastGoodRevisionTests(unittest.TestCase):
+class ReadLastGoodRevisionTests(KubeContextEnvMixin, unittest.TestCase):
     def test_picks_newest_deployed_or_superseded(self) -> None:
         history = [
             {"revision": 1, "status": "superseded"},

@@ -149,6 +149,89 @@ class RewriteImageTagsTests(unittest.TestCase):
 
 
 # =============================================================
+# Upstream image-rename detection
+# =============================================================
+
+
+class RepositoryDriftTests(unittest.TestCase):
+    """This template rewrites tags but never ``repository:``.
+
+    The Harbor chart renamed ``redis-photon`` -> ``valkey-photon`` upstream in
+    1.19.2. The override kept the old name and took the new tag, producing
+    ``goharbor/redis-photon:v2.15.2`` — a reference that does not exist, which
+    no resource-removal diff check can see.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.component = Path(self._tmp.name) / "harbor-helm"
+        self.values_dir = self.component / "values"
+        self.values_dir.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _upstream(self, body: str) -> None:
+        (self.component / "values.yaml").write_text(body)
+
+    def _override(self, name: str, body: str) -> None:
+        (self.values_dir / name).write_text(body)
+
+    def _warn(self, exclude: str = "") -> str:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            ei._warn_repository_drift(
+                values_dir=self.values_dir, exclude_patterns=exclude
+            )
+        return buf.getvalue()
+
+    def test_renamed_image_is_flagged(self) -> None:
+        self._upstream(
+            "redis:\n  internal:\n    image:\n"
+            "      repository: docker.io/goharbor/valkey-photon\n"
+        )
+        self._override(
+            "dev.yaml",
+            "redis:\n  internal:\n    image:\n"
+            "      repository: goharbor/redis-photon\n      tag: v2.15.2\n",
+        )
+        out = self._warn()
+        self.assertIn("redis-photon", out)
+        self.assertIn("WARNING", out)
+
+    def test_matching_image_is_silent(self) -> None:
+        self._upstream("image:\n  repository: docker.io/goharbor/valkey-photon\n")
+        self._override(
+            "dev.yaml", "image:\n  repository: goharbor/valkey-photon\n  tag: v2.15.2\n"
+        )
+        self.assertEqual(self._warn(), "")
+
+    def test_registry_retarget_is_not_flagged(self) -> None:
+        """A mirror / custom-build override changes the host, not the image name."""
+        self._upstream("image:\n  repository: docker.io/library/ghost\n")
+        self._override(
+            "dev.yaml", "image:\n  repository: harbor.example.com/library/ghost\n"
+        )
+        self.assertEqual(self._warn(), "")
+
+    def test_missing_upstream_values_is_silent(self) -> None:
+        self._override("dev.yaml", "image:\n  repository: goharbor/redis-photon\n")
+        self.assertEqual(self._warn(), "")
+
+    def test_excluded_override_is_skipped(self) -> None:
+        self._upstream("image:\n  repository: docker.io/goharbor/valkey-photon\n")
+        self._override("dev-old.yaml", "image:\n  repository: goharbor/redis-photon\n")
+        self.assertEqual(self._warn(exclude="dev-old.yaml"), "")
+
+    def test_basenames_parsed_with_quotes_and_comments(self) -> None:
+        text = (
+            'image:\n  repository: "docker.io/goharbor/core"  # quoted + comment\n'
+            "other:\n  repository: goharbor/portal\n"
+        )
+        self.assertEqual(ei._repository_basenames(text), {"core", "portal"})
+
+
+# =============================================================
 # Module wiring — the ``external_with_image_tag`` module must hand its hook to ``external_standard``'s run()
 # =============================================================
 

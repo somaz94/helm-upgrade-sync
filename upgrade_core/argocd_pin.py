@@ -30,9 +30,12 @@ reads ``GITHUB_REPO`` / ``GITHUB_TAG_PREFIX`` / ``HELM_CHART`` plus the
 optional ``do_mirror`` / ``print_values_summary`` callables — identical to
 the wrapped base templates.
 
-The local component ``Chart.yaml`` continues to be refreshed by the base
-flow (it mirrors the same version), so ``check-versions.py`` and the base
-Step 1 stay consistent with the ArgoCD pin.
+The local component ``Chart.yaml`` is an OPTIONAL derived mirror, not the
+SSOT. Components that ship one have it refreshed by the base flow; components
+that ship none keep none, because ``skip_missing_chart_mirror`` suppresses the
+write. Either way the base Step 1 resolves the current version through
+``current_version_hook`` below, so it agrees with ``check-versions.py``, which
+reads the same ArgoCD metadata file.
 
 Public entry-point: ``run(config, argv, script_path)``.
 """
@@ -69,6 +72,25 @@ def _make_pin_write_hook(argocd_pin_files: list[str]):
     return pin_write
 
 
+def _make_current_version_hook(argocd_pin_files: list[str]):
+    """Build the Step 1 ``current_version_hook`` closure.
+
+    The ArgoCD metadata file IS the chart-version SSOT, so a component that
+    keeps no local ``Chart.yaml`` mirror still has an authoritative current
+    version. Returns the first non-empty ``chart.version`` across the tracked
+    pin files — they are held at the same version by construction, since
+    :func:`_make_pin_write_hook` bumps them together.
+    """
+    def current_version(*, chart_dir: Path) -> str:
+        for rel in argocd_pin_files:
+            found = _common_argocd.read_argocd_chart_version(chart_dir / rel)
+            if found:
+                return found
+        return ""
+
+    return current_version
+
+
 def run(config: dict, argv: list[str], script_path: str | os.PathLike) -> int:
     """Entry-point invoked by each consumer ``upgrade.py``.
 
@@ -85,14 +107,25 @@ def run(config: dict, argv: list[str], script_path: str | os.PathLike) -> int:
         return 1
 
     pin_write_hook = _make_pin_write_hook(list(argocd_pin_files))
+    current_version_hook = _make_current_version_hook(list(argocd_pin_files))
 
     if base == "oci":
         return _run_oci_with_mirror(
-            config, argv, script_path, pin_write_hook=pin_write_hook
+            config,
+            argv,
+            script_path,
+            pin_write_hook=pin_write_hook,
+            current_version_hook=current_version_hook,
+            skip_missing_chart_mirror=True,
         )
     if base == "standard":
         return _run_external_standard(
-            config, argv, script_path, pin_write_hook=pin_write_hook
+            config,
+            argv,
+            script_path,
+            pin_write_hook=pin_write_hook,
+            current_version_hook=current_version_hook,
+            skip_missing_chart_mirror=True,
         )
 
     print(

@@ -287,6 +287,42 @@ class RunIntegrationTests(unittest.TestCase):
             ewm.run(cfg, [], script_path="/tmp/upgrade.py")
         self.assertIsNotNone(called["pre_apply_hook"])
 
+    def test_run_forwards_pin_only_kwargs(self) -> None:
+        """The argocd-pin (BASE='oci') path routes through here, so both
+        pin-only kwargs must reach external_standard.run rather than being
+        swallowed — otherwise a pin-only OCI component would hit the same
+        silent empty-current-version degradation."""
+        cfg = self._consumer_config()
+        called: dict = {}
+
+        def fake_runner(config, argv, script_path, **kwargs):
+            called.update(kwargs)
+            return 0
+
+        sentinel = lambda *, chart_dir: "1.2.3"  # noqa: E731
+        with mock.patch.object(ewm, "_run_external_standard", side_effect=fake_runner):
+            ewm.run(
+                cfg, [], script_path="/tmp/upgrade.py",
+                current_version_hook=sentinel,
+                skip_missing_chart_mirror=True,
+            )
+        self.assertIs(called["current_version_hook"], sentinel)
+        self.assertTrue(called["skip_missing_chart_mirror"])
+
+    def test_run_defaults_pin_only_kwargs_off(self) -> None:
+        """Every non-argocd-pin OCI consumer keeps the baseline behavior."""
+        cfg = self._consumer_config()
+        called: dict = {}
+
+        def fake_runner(config, argv, script_path, **kwargs):
+            called.update(kwargs)
+            return 0
+
+        with mock.patch.object(ewm, "_run_external_standard", side_effect=fake_runner):
+            ewm.run(cfg, [], script_path="/tmp/upgrade.py")
+        self.assertIsNone(called["current_version_hook"])
+        self.assertFalse(called["skip_missing_chart_mirror"])
+
     def test_run_wires_print_values_summary(self) -> None:
         """CONFIG['print_values_summary'] becomes values_summary_hook."""
         cfg = self._consumer_config()

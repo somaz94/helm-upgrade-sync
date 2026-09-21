@@ -65,7 +65,10 @@ _HELMFILE_RELEASE_PIN = re.compile(r'^[ \t]+version:[ \t]+(.+)$')
 _ARGOCD_CHART_VERSION = re.compile(r'^[ \t]+version:[ \t]+(.+)$')
 
 # ArgoCD metadata marker dirs, in priority order: ``argocd/`` (on-prem)
-# and ``argocd-aws/`` (AWS). A component dir carries exactly one.
+# and ``argocd-aws/`` (AWS). A multi-track component carries several, all
+# pinned to the SAME version (ARGOCD_PIN_FILES flips them together), so
+# first-match is safe here. A missing dir is a no-op; dropping a marker makes
+# the probe return "" SILENTLY.
 _ARGOCD_MARKER_DIRS = ("argocd", "argocd-aws")
 
 
@@ -78,9 +81,11 @@ def read_argocd_chart_version(component_dir: Path) -> str:
     convention: ``argocd/`` for on-prem components and ``argocd-aws/``
     for AWS components (a disjoint marker dir avoids a cross-cluster
     ``infra-<releaseName>`` app-name collision — the on-prem and AWS
-    infra-applicationsets glob the SAME repo). A given component dir
-    carries exactly one of the two. Scans the marker dir's ``*.yaml``
-    in sorted order and returns the first ``chart.version`` found.
+    infra-applicationsets glob the SAME repo). A component carries one
+    marker per track it is delivered to; when it carries both they pin
+    the same chart version, so the first match is authoritative either
+    way. Scans the marker dir's ``*.yaml`` in sorted order and returns
+    the first ``chart.version`` found.
 
     Multi-release components list several files (e.g. gitlab-runner
     build-image / deploy-image / old-build-deploy-image); the tracked

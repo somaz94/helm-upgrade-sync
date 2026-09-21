@@ -443,12 +443,11 @@ class ParseUpgradeArgvTests(unittest.TestCase):
                 self.assertEqual(cm_exit.exception.code, 0)
                 self.assertEqual(self.called, [hook])
 
-    def test_unknown_option_prints_usage_and_exits_zero(self) -> None:
+    def test_unknown_option_prints_usage_and_exits_one(self) -> None:
         with redirect_stdout(io.StringIO()) as out:
             with self.assertRaises(SystemExit) as cm_exit:
                 self.parse(["--bogus"])
-        # Exit code 0 is deliberate — bash-template parity.
-        self.assertEqual(cm_exit.exception.code, 0)
+        self.assertEqual(cm_exit.exception.code, 1)
         self.assertIn("Unknown option: --bogus", out.getvalue())
         self.assertEqual(self.called, ["usage"])
 
@@ -457,7 +456,7 @@ class ParseUpgradeArgvTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()) as out:
             with self.assertRaises(SystemExit) as cm_exit:
                 self.parse(["--exclude", "old"], support_exclude=False)
-        self.assertEqual(cm_exit.exception.code, 0)
+        self.assertEqual(cm_exit.exception.code, 1)
         self.assertIn("Unknown option: --exclude", out.getvalue())
 
 

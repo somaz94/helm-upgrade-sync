@@ -127,6 +127,20 @@ PreApplyHook = Callable[..., int]
 # helmfile pin path byte-for-byte for every non-migrated component.
 PinWriteHook = Callable[..., int]
 
+# Step 1 — current-version probe fallback. Fires ONLY when the local
+# Chart.yaml is absent or carries no ``version:`` field. Used by the
+# ``argocd-pin`` template, whose version SSOT is the ArgoCD metadata file
+# ``<component>/argocd[-aws]/<release>.yaml`` (chart.version), not the local
+# Chart.yaml — which is a derived mirror some components deliberately do not
+# ship. Without this fallback the probe returns "" and every downstream step
+# degrades silently: the values diff compares latest against latest (helm
+# reads ``--version ""`` as "no constraint"), so the Step 6 breaking-change
+# scan reports no removed keys, and the pin rewrite matches 0 files while
+# still reporting success. Receives ``(chart_dir)`` and returns the current
+# version ("" when undeterminable). Default ``None`` keeps the Chart.yaml-only
+# probe byte-for-byte for every other consumer.
+CurrentVersionHook = Callable[..., str]
+
 
 def run(
     config: dict,
@@ -141,6 +155,8 @@ def run(
     values_summary_hook: ValuesSummaryHook | None = None,
     pre_apply_hook: PreApplyHook | None = None,
     pin_write_hook: PinWriteHook | None = None,
+    current_version_hook: CurrentVersionHook | None = None,
+    skip_missing_chart_mirror: bool = False,
 ) -> int:
     """Entry-point invoked by each consumer ``upgrade.py``.
 
@@ -162,6 +178,17 @@ def run(
         pattern). When supplied it fires on apply regardless of helmfile
         presence and the helmfile pin path is skipped; ``None`` keeps the
         helmfile pin behavior unchanged.
+      - ``current_version_hook`` — Step 1 fallback consulted only when the
+        local Chart.yaml yields no ``version`` (argocd-pin pattern, where the
+        ArgoCD metadata file is the version SSOT). ``None`` keeps the
+        Chart.yaml-only probe.
+
+    ``skip_missing_chart_mirror`` (argocd-pin pattern) suppresses the local
+    Chart.yaml / values.yaml / values.schema.json mirror write for components
+    that ship no such mirror to begin with. Writing one would fabricate
+    untracked files whose contents are already authoritative in the ArgoCD
+    metadata pin. Only takes effect when the local Chart.yaml is absent, so a
+    component that does keep a mirror still has it refreshed.
 
     ``total_steps`` defaults to 7 to preserve the four baseline templates byte-for-byte
     output. ``external_oci_with_mirror`` passes 8 so the Apply step renumbers to ``[Step 8/8]``.
@@ -201,6 +228,8 @@ def run(
         values_summary_hook=values_summary_hook,
         pre_apply_hook=pre_apply_hook,
         pin_write_hook=pin_write_hook,
+        current_version_hook=current_version_hook,
+        skip_missing_chart_mirror=skip_missing_chart_mirror,
     )
 
 
@@ -306,6 +335,8 @@ def _main_flow(
     values_summary_hook: ValuesSummaryHook | None = None,
     pre_apply_hook: PreApplyHook | None = None,
     pin_write_hook: PinWriteHook | None = None,
+    current_version_hook: CurrentVersionHook | None = None,
+    skip_missing_chart_mirror: bool = False,
 ) -> int:
     _print_run_banner(
         config["SCRIPT_NAME"],
@@ -320,7 +351,31 @@ def _main_flow(
     chart_yaml = chart_dir / "Chart.yaml"
     current_version = _read_yaml_field(chart_yaml, "version")
     current_app_version = _read_yaml_field(chart_yaml, "appVersion")
+    # Pin-only components ship no local Chart.yaml mirror — their version SSOT
+    # is the ArgoCD metadata file. Resolve from there instead of proceeding
+    # with an empty current version, which silently disables the values diff
+    # and the breaking-change scan further down.
+    if not current_version and current_version_hook is not None:
+        current_version = current_version_hook(chart_dir=chart_dir)
+        if current_version:
+            current_app_version = "(n/a - pin-only component)"
+            print("  (no local Chart.yaml - current version read from the version pin)")
     print(f"  Installed - Chart: {current_version} / App: {current_app_version}")
+
+    # Only templates that declare a pin SSOT (argocd-pin, via
+    # ``current_version_hook``) treat an unresolvable current version as fatal.
+    # The baseline path must stay permissive: onboarding a freshly-scaffolded
+    # component legitimately starts with no Chart.yaml, and the apply step is
+    # what materializes it.
+    if not current_version and current_version_hook is not None:
+        print(
+            "  ERROR: could not determine the current chart version - neither "
+            "the local Chart.yaml nor the version pin yielded one. Check "
+            "ARGOCD_PIN_FILES and the chart.version field. Aborting before any "
+            "file is written.",
+            file=sys.stderr,
+        )
+        return 1
 
     if helmfile_path is not None:
         print()
@@ -401,6 +456,7 @@ def _main_flow(
             post_pin_hook=post_pin_hook,
             pre_apply_hook=pre_apply_hook,
             pin_write_hook=pin_write_hook,
+            skip_missing_chart_mirror=skip_missing_chart_mirror,
         )
 
 
@@ -493,6 +549,7 @@ def _apply_upgrade(
     post_pin_hook: PostPinHook | None = None,
     pre_apply_hook: PreApplyHook | None = None,
     pin_write_hook: PinWriteHook | None = None,
+    skip_missing_chart_mirror: bool = False,
 ) -> int:
     # Step 3
     print()
@@ -711,7 +768,17 @@ def _apply_upgrade(
         print(f"    - {entry.name}")
 
     # Chart + values + schema write (overridable for ``external_oci`` wrapper-mode).
-    if chart_write_hook is not None:
+    # Pin-only components (argocd-pin with no local Chart.yaml) skip this
+    # entirely: the mirror they would gain is a derived copy of a version the
+    # ArgoCD metadata pin already owns, and materializing it here would add
+    # thousands of lines of generated files that then need tracking in git.
+    if skip_missing_chart_mirror and not (chart_dir / "Chart.yaml").is_file():
+        print()
+        print(
+            "  Skipped local chart mirror write (pin-only component - "
+            "the ArgoCD metadata file is the version SSOT)"
+        )
+    elif chart_write_hook is not None:
         chart_write_hook(
             chart_dir=chart_dir,
             temp_dir=temp_dir,
@@ -739,6 +806,17 @@ def _apply_upgrade(
             current_version=current_version,
             latest_version=latest_version,
         )
+        # A 0-file rewrite means the pin SSOT was not at ``current_version``,
+        # so nothing was bumped and the deploy would be a no-op. Reporting
+        # success here is what let this failure mode reach a green pipeline.
+        if pins == 0:
+            print(
+                f"  ERROR: version pin rewrite matched 0 file(s) - the pin "
+                f"SSOT is not at '{current_version}'. Inspect `git diff` "
+                f"before retrying.",
+                file=sys.stderr,
+            )
+            return 1
         print(
             f"  Updated version pin ({pins} file(s): "
             f"{current_version} -> {latest_version})"

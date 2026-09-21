@@ -529,6 +529,72 @@ class ChartPinDispatcherTests(unittest.TestCase):
             )
         self.assertEqual(ecv._chart_pin_label("helmfile.yaml", None), "helmfile.yaml")
 
+    def test_write_fans_out_across_every_marker(self) -> None:
+        # The regression this guards: a component enrolled on two delivery
+        # tracks carries one metadata file per cluster. The READ path is
+        # first-match, so bumping only the primary leaves the second cluster
+        # pinned to the old chart AND keeps reporting the new version -- the
+        # drift is invisible. Unlike the `argocd-pin` template there is no
+        # CONFIG.ARGOCD_PIN_FILES here; auto-discovery is the only guard.
+        with tempfile.TemporaryDirectory() as tmp:
+            chart_dir = Path(tmp)
+            files = {}
+            for marker in ("argocd", "argocd-aws"):
+                d = chart_dir / marker
+                d.mkdir()
+                f = d / "elasticsearch.yaml"
+                f.write_text(_ES_ARGOCD_META)
+                files[marker] = f
+            primary = ecv._detect_argocd_pin_file(chart_dir)
+            written, skipped = ecv._chart_pin_write(None, primary, "0.1.9", "0.1.10")
+            self.assertEqual(len(written), 2)
+            self.assertEqual(skipped, [])
+            for marker, f in files.items():
+                self.assertIn('  version: "0.1.10"', f.read_text(), marker)
+
+    def test_write_skips_and_reports_a_divergent_marker(self) -> None:
+        # A marker deliberately held at another version is never force-matched
+        # (update_argocd_chart_version only rewrites an exact `current`); it
+        # comes back in `skipped` so the caller can warn instead of the bump
+        # silently half-landing.
+        with tempfile.TemporaryDirectory() as tmp:
+            chart_dir = Path(tmp)
+            onprem = chart_dir / "argocd"
+            onprem.mkdir()
+            (onprem / "elasticsearch.yaml").write_text(_ES_ARGOCD_META)
+            other = chart_dir / "argocd-aws"
+            other.mkdir()
+            held = other / "elasticsearch.yaml"
+            held.write_text(_ES_ARGOCD_META.replace('"0.1.9"', '"0.1.4"'))
+            primary = ecv._detect_argocd_pin_file(chart_dir)
+            written, skipped = ecv._chart_pin_write(None, primary, "0.1.9", "0.1.10")
+            self.assertEqual([f.parent.name for f in written], ["argocd"])
+            self.assertEqual([f.parent.name for f in skipped], ["argocd-aws"])
+            self.assertIn('  version: "0.1.4"', held.read_text())
+
+    def test_detect_pin_files_returns_every_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            chart_dir = Path(tmp)
+            for marker in ("argocd-aws", "argocd-unlisted", "argocd"):
+                d = chart_dir / marker
+                d.mkdir()
+                (d / "elasticsearch.yaml").write_text(_ES_ARGOCD_META)
+            found = ecv._detect_argocd_pin_files(chart_dir)
+            # Marker-order, not filesystem order; unlisted dirs are ignored.
+            self.assertEqual(
+                [f.parent.name for f in found], ["argocd", "argocd-aws"]
+            )
+
+    def test_write_returns_helmfile_when_no_argocd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hf = Path(tmp) / "helmfile.yaml"
+            hf.write_text(
+                "releases:\n  - name: es\n    chart: oci://x/es\n    version: 0.1.9\n"
+            )
+            written, skipped = ecv._chart_pin_write(hf, None, "0.1.9", "0.1.10")
+            self.assertEqual(written, [hf])
+            self.assertEqual(skipped, [])
+
     def test_write_targets_argocd_when_present(self) -> None:
         a = self._argocd()
         ecv._chart_pin_write(None, a, "0.1.9", "0.1.10")

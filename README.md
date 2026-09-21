@@ -117,6 +117,16 @@ Rule 3 deliberately outranks rule 4: a copy vendored inside a repository keeps m
 | `argocd-pin` | Component pinned by an ArgoCD marker file rather than helmfile |
 | `ansible-github-release` | Ansible-deployed component tracking GitHub Releases |
 
+### Cluster access for the CR templates
+
+`local-cr-version` and `external-oci-cr-version` talk to a cluster (health probe, dependency-version guard, live CR version, and the downgrade rollback). Every such call is pinned to the context named in `KUBE_CONTEXT`; the current kubectl context is never used implicitly. Set it to the kube-context the chart targets:
+
+```bash
+KUBE_CONTEXT="$(kubectl config current-context)" ./upgrade.py --dry-run
+```
+
+When `KUBE_CONTEXT` is unset, the read-only checks are skipped and each one says so (`REFUSED` / `constraint NOT verified`), and the downgrade rollback — which scales the operator down and deletes its admission webhook — refuses to run and exits 2. The other templates never contact a cluster and do not need it.
+
 <br/>
 
 ## Adding a component

@@ -484,15 +484,14 @@ class ParseArgsTests(unittest.TestCase):
                 )
         self.assertEqual(cm.exception.code, 0)
 
-    def test_unknown_option_exits_zero_after_usage(self) -> None:
-        # bash mirror: `Unknown option: X\n\n<usage>` then `exit 0` from usage.
+    def test_unknown_option_exits_one_after_usage(self) -> None:
         with self.assertRaises(SystemExit) as cm:
             with redirect_stdout(io.StringIO()):
                 es._parse_args(
                     ["--bogus"], "upgrade.py", 5,
                     self.backup, self.chart_dir, self.values_dir,
                 )
-        self.assertEqual(cm.exception.code, 0)
+        self.assertEqual(cm.exception.code, 1)
 
     def test_combined_dry_run_and_version(self) -> None:
         args = es._parse_args(
@@ -654,6 +653,99 @@ class RunFlowTests(unittest.TestCase):
         chart_yaml = self.chart_dir / "Chart.yaml"
         self.assertTrue(chart_yaml.is_file())
         self.assertIn("version: 1.1.0", chart_yaml.read_text())
+
+    # ----- current_version_hook (argocd-pin pin-only components) -----
+
+    def test_current_version_hook_not_called_when_chart_yaml_has_version(self) -> None:
+        """The Step 1 fallback must stay dormant for every consumer that keeps
+        a local Chart.yaml — i.e. the code path is unchanged for all of them."""
+        calls = []
+
+        def hook(*, chart_dir):
+            calls.append(chart_dir)
+            return "9.9.9"
+
+        def handler(cmd):
+            if cmd[:2] == ["helm", "search"]:
+                return '[{"version":"1.0.0","app_version":"7.0.0"}]'
+            return ""
+
+        buf = io.StringIO()
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(handler)):
+            with redirect_stdout(buf):
+                rc = es.run(self.config, [], self.script, current_version_hook=hook)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [], "hook fired despite a readable Chart.yaml")
+        self.assertIn("Installed - Chart: 1.0.0", buf.getvalue())
+
+    def test_current_version_hook_called_when_chart_yaml_absent(self) -> None:
+        (self.chart_dir / "Chart.yaml").unlink()
+        calls = []
+
+        def hook(*, chart_dir):
+            calls.append(chart_dir)
+            return "1.0.0"
+
+        def handler(cmd):
+            if cmd[:2] == ["helm", "search"]:
+                return '[{"version":"1.0.0","app_version":"7.0.0"}]'
+            return ""
+
+        buf = io.StringIO()
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(handler)):
+            with redirect_stdout(buf):
+                rc = es.run(self.config, [], self.script, current_version_hook=hook)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("current version read from the version pin", buf.getvalue())
+
+    def test_absent_chart_yaml_without_hook_stays_permissive(self) -> None:
+        """Onboarding regression guard: with no hook supplied, an absent
+        Chart.yaml must NOT become a hard failure — the apply step is what
+        materializes it for a freshly-scaffolded component."""
+        (self.chart_dir / "Chart.yaml").unlink()
+        (self.chart_dir / "values.yaml").unlink()
+        (self.chart_dir / "helmfile.yaml").write_text(
+            "releases:\n  - name: x\n    chart: x/x\n    version: 1.1.0\n"
+        )
+
+        def handler(cmd):
+            if cmd[:2] == ["helm", "search"]:
+                return '[{"version":"1.1.0","app_version":"7.1.0"}]'
+            if cmd[:3] == ["helm", "show", "chart"]:
+                return "apiVersion: v2\nname: x\nversion: 1.1.0\nappVersion: 7.1.0\n"
+            if cmd[:3] == ["helm", "show", "values"]:
+                return "global:\n  foo: 2\n"
+            return ""
+
+        buf = io.StringIO()
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(handler)):
+            with redirect_stdout(buf):
+                rc = es.run(self.config, [], self.script)
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.chart_dir / "Chart.yaml").is_file())
+
+    def test_skip_missing_chart_mirror_only_applies_when_absent(self) -> None:
+        """The flag must not suppress the refresh for a component that DOES
+        ship a mirror — only pin-only components skip the write."""
+        def handler(cmd):
+            if cmd[:2] == ["helm", "search"]:
+                return '[{"version":"1.1.0","app_version":"7.1.0"}]'
+            if cmd[:3] == ["helm", "show", "chart"]:
+                return "apiVersion: v2\nname: x\nversion: 1.1.0\nappVersion: 7.1.0\n"
+            if cmd[:3] == ["helm", "show", "values"]:
+                return "global:\n  foo: 2\n"
+            return ""
+
+        buf = io.StringIO()
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(handler)):
+            with redirect_stdout(buf):
+                rc = es.run(
+                    self.config, [], self.script, skip_missing_chart_mirror=True
+                )
+        self.assertEqual(rc, 0)
+        self.assertNotIn("Skipped local chart mirror write", buf.getvalue())
+        self.assertIn("version: 1.1.0", (self.chart_dir / "Chart.yaml").read_text())
 
     # ----- the shell -> python migration total_steps=8 + pre_apply_hook -----
 

@@ -25,7 +25,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -277,5 +277,132 @@ class HelmfilePathUnaffectedTests(unittest.TestCase):
         import shutil
 
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# =============================================================
+# Pin-only components — no local Chart.yaml mirror
+# =============================================================
+
+
+class ArgocdPinNoLocalChartYamlTests(unittest.TestCase):
+    """A component whose version SSOT is the ArgoCD metadata file and which
+    ships NO local Chart.yaml mirror.
+
+    Before ``current_version_hook``, Step 1 read the absent Chart.yaml, got
+    "", and every downstream step degraded silently: the values diff compared
+    latest against latest, the breaking-change scan reported nothing removed,
+    and the pin rewrite matched 0 files while still printing success and
+    returning 0.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.chart_dir = self.tmp / "comp"
+        self.chart_dir.mkdir()
+        # Pin-only layout: values/ + argocd/ only. No Chart.yaml, no
+        # values.yaml, no helmfile.
+        (self.chart_dir / "values").mkdir()
+        (self.chart_dir / "values" / "prod.yaml").write_text("global:\n  foo: 2\n")
+        argocd = self.chart_dir / "argocd-aws"
+        argocd.mkdir()
+        self.release = argocd / "release.yaml"
+        self.release.write_text(
+            "component: x\nreleaseName: x\nchart:\n"
+            "  repoURL: https://x.example\n  name: x\n"
+            '  version: "1.0.0"\n'
+            "autoSync: true\n"
+        )
+        self.script = self.chart_dir / "upgrade.py"
+        self.script.write_text("# stub\n")
+        self.config = {
+            "SCRIPT_NAME": "Argocd-pin Pin-only Test",
+            "HELM_REPO_NAME": "x",
+            "HELM_REPO_URL": "https://x.example",
+            "HELM_CHART": "x/x",
+            "CHANGELOG_URL": "https://example/CHANGELOG.md",
+            "CHART_TYPE": "external",
+            "BASE": "standard",
+            "ARGOCD_PIN_FILES": ["argocd-aws/release.yaml"],
+        }
+
+    def tearDown(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _handler(self, cmd):
+        if cmd[:2] == ["helm", "search"]:
+            return '[{"version":"1.1.0","app_version":"7.1.0"}]'
+        if cmd[:3] == ["helm", "show", "chart"]:
+            return "apiVersion: v2\nname: x\nversion: 1.1.0\nappVersion: 7.1.0\n"
+        if cmd[:3] == ["helm", "show", "values"]:
+            return "global:\n  foo: 2\n"
+        if cmd[:2] == ["helm", "pull"]:
+            return ""
+        if cmd and cmd[0] == "diff":
+            return ""
+        return ""
+
+    def _run(self, argv):
+        buf = io.StringIO()
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(self._handler)):
+            with redirect_stdout(buf):
+                rc = ap.run(self.config, argv, self.script)
+        return rc, buf.getvalue()
+
+    def test_step1_reads_current_version_from_pin(self) -> None:
+        rc, out = self._run([])
+        self.assertEqual(rc, 0)
+        self.assertIn("current version read from the version pin", out)
+        # The left-hand side of the upgrade arrow is populated, not blank.
+        self.assertIn("Installed - Chart: 1.0.0", out)
+
+    def test_apply_bumps_pin_without_creating_chart_mirror(self) -> None:
+        rc, out = self._run([])
+        self.assertEqual(rc, 0)
+        self.assertIn("Updated version pin (1 file(s): 1.0.0 -> 1.1.0)", out)
+        self.assertIn('  version: "1.1.0"', self.release.read_text())
+        # The mirror is NOT fabricated.
+        self.assertIn("Skipped local chart mirror write", out)
+        self.assertFalse((self.chart_dir / "Chart.yaml").exists())
+        self.assertFalse((self.chart_dir / "values.yaml").exists())
+        self.assertFalse((self.chart_dir / "values.schema.json").exists())
+
+    def test_dry_run_writes_nothing(self) -> None:
+        original = self.release.read_text()
+        rc, _ = self._run(["--dry-run"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.release.read_text(), original)
+        self.assertFalse((self.chart_dir / "Chart.yaml").exists())
+
+    def test_unresolvable_current_version_aborts(self) -> None:
+        """No Chart.yaml AND a pin file that carries no chart.version — the
+        run must fail loudly instead of proceeding with an empty current."""
+        self.release.write_text("component: x\nreleaseName: x\nautoSync: true\n")
+        buf, err = io.StringIO(), io.StringIO()
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(self._handler)):
+            with redirect_stdout(buf), redirect_stderr(err):
+                rc = ap.run(self.config, [], self.script)
+        self.assertEqual(rc, 1)
+        self.assertIn("could not determine the current chart version", err.getvalue())
+        self.assertFalse((self.chart_dir / "Chart.yaml").exists())
+
+    def test_pin_rewrite_matching_zero_files_fails(self) -> None:
+        """The pin SSOT sits at a version other than the resolved current
+        (e.g. hand-edited between runs), so the rewrite matches nothing. That
+        used to print success and return 0 — a green no-op deploy."""
+        (self.chart_dir / "Chart.yaml").write_text(
+            "apiVersion: v2\nname: x\nversion: 0.9.0\nappVersion: 6.0.0\n"
+        )
+        buf, err = io.StringIO(), io.StringIO()
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(self._handler)):
+            with redirect_stdout(buf), redirect_stderr(err):
+                rc = ap.run(self.config, [], self.script)
+        self.assertEqual(rc, 1)
+        self.assertIn("matched 0 file(s)", err.getvalue())
+        # The pin is left exactly as it was.
+        self.assertIn('  version: "1.0.0"', self.release.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

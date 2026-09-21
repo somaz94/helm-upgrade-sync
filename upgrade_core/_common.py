@@ -181,9 +181,8 @@ def parse_upgrade_argv(
     Returns ``{"dry_run", "target_version", "exclude_patterns"}`` for the
     main flow. ``--help``, ``--list-backups``, ``--rollback`` and
     ``--cleanup-backups`` invoke their callback and then ``sys.exit(0)``.
-    A missing ``--version`` / ``--exclude`` operand exits 1; an unknown
-    option prints usage and exits 0 (bash-template parity — the exit code
-    is deliberately 0, not 1).
+    A missing ``--version`` / ``--exclude`` operand and an unknown option both
+    exit 1 (the unknown option after printing usage), same as the CR templates.
 
     ``support_exclude=False`` drops ``--exclude`` from the grammar so it
     falls through to the unknown-option branch
@@ -227,7 +226,7 @@ def parse_upgrade_argv(
             print(f"Unknown option: {arg}")
             print()
             usage()
-            sys.exit(0)
+            sys.exit(1)
 
     return {
         "dry_run": dry_run,

@@ -36,7 +36,11 @@ from .external_oci import (
     _helmfile_pin_default_or_scoped,
     _write_chart_wrapper_aware,
 )
-from .external_standard import PinWriteHook, run as _run_external_standard
+from .external_standard import (
+    CurrentVersionHook,
+    PinWriteHook,
+    run as _run_external_standard,
+)
 
 
 # -----------------------------------------------
@@ -148,6 +152,8 @@ def run(
     script_path: str | os.PathLike,
     *,
     pin_write_hook: PinWriteHook | None = None,
+    current_version_hook: CurrentVersionHook | None = None,
+    skip_missing_chart_mirror: bool = False,
 ) -> int:
     """Entry-point invoked by each consumer ``upgrade.py``.
 
@@ -235,6 +241,8 @@ def run(
         values_summary_hook=values_summary,
         pre_apply_hook=pre_apply,
         pin_write_hook=pin_write_hook,
+        current_version_hook=current_version_hook,
+        skip_missing_chart_mirror=skip_missing_chart_mirror,
     )
 
 

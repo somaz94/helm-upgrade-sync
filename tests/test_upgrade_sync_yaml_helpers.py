@@ -106,6 +106,28 @@ class TestReadArgocdChartVersion(unittest.TestCase):
         )
         self.assertEqual(read_argocd_chart_version(comp), "0.90.1")
 
+    def test_multi_track_component_carries_two_markers(self) -> None:
+        # A component delivered to two clusters carries BOTH markers (one
+        # valueFile per cluster). upgrade.py flips every path in
+        # CONFIG.ARGOCD_PIN_FILES together, so both pin the same version and
+        # first-match is well-defined.
+        comp = self._component(
+            {"external-dns.yaml": "chart:\n  version: 1.19.0\n"},
+        )
+        other = comp / "argocd-aws"
+        other.mkdir()
+        (other / "external-dns.yaml").write_text("chart:\n  version: 1.19.0\n")
+        self.assertEqual(read_argocd_chart_version(comp), "1.19.0")
+
+    def test_onprem_marker_wins_in_priority_order(self) -> None:
+        # Priority order is on-prem first; a both-present component stays
+        # byte-identical to on-prem-only behavior.
+        comp = self._component({"release.yaml": "chart:\n  version: 1.0.0\n"})
+        other = comp / "argocd-aws"
+        other.mkdir()
+        (other / "release.yaml").write_text("chart:\n  version: 2.0.0\n")
+        self.assertEqual(read_argocd_chart_version(comp), "1.0.0")
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

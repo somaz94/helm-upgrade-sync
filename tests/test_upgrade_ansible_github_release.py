@@ -388,11 +388,11 @@ class ParseArgsTests(unittest.TestCase):
                 ag._parse_args(["--help"], **self.kwargs)
         self.assertEqual(cm.exception.code, 0)
 
-    def test_unknown_option_exits_zero_after_usage(self) -> None:
+    def test_unknown_option_exits_one_after_usage(self) -> None:
         with self.assertRaises(SystemExit) as cm:
             with redirect_stdout(io.StringIO()):
                 ag._parse_args(["--bogus"], **self.kwargs)
-        self.assertEqual(cm.exception.code, 0)
+        self.assertEqual(cm.exception.code, 1)
 
 
 # =============================================================

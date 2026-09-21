@@ -424,33 +424,46 @@ def _read_helmfile_release_name(helmfile_path: Path) -> str:
 # =============================================================
 
 
-# ArgoCD marker directories for a migrated remote-OCI CR component, in
-# on-prem-first order. on-prem uses ``argocd/``; the AWS variant
-# uses ``argocd-aws/`` (marker taxonomy in CLAUDE.md — the four infra globs are
-# disjoint, so a component owns exactly one). on-prem-first ordering keeps a
-# hypothetical both-present component byte-identical to pre-migration on-prem
-# behavior. Only the two remote-OCI markers are listed: this template's
-# consumers pull a public OCI chart, never a vendored local chart (that path is
-# ``local_cr_version``), so ``argocd-local/`` / ``argocd-local-aws/`` never apply.
+# Remote-OCI marker dirs, on-prem first (``argocd-local*`` never apply here:
+# this template's consumers pull a public OCI chart, never a vendored one).
+# Every marker of one component pins the SAME version, so first-match is
+# safe for READS; writes fan out (see _chart_pin_write). This template ignores
+# CONFIG.ARGOCD_PIN_FILES. A missing dir is a no-op, but dropping a marker
+# makes this probe return None SILENTLY with no test catching it.
 _ARGOCD_MARKER_DIRS = ("argocd", "argocd-aws")
 
 
-def _detect_argocd_pin_file(chart_dir: Path) -> Path | None:
-    """Return the component's ArgoCD metadata file, or None.
+def _detect_argocd_pin_files(chart_dir: Path) -> list[Path]:
+    """Return EVERY ArgoCD metadata file of this component carrying a pin.
 
     Scans each marker directory (``argocd/`` for on-prem, ``argocd-aws/`` for
-    the AWS variant) in sorted order and returns the first file
-    carrying a ``chart.version`` pin. CR components track a single release, so
-    the first match is authoritative.
+    the AWS variant) in marker order, then filename order within each.
+
+    A component delivered to one cluster yields one file. A component enrolled
+    on two delivery tracks yields two, one per cluster, because each cluster's
+    ApplicationSet needs its own ``valueFile``. Both pin the same chart
+    version, so a bump must rewrite BOTH; see _chart_pin_write.
     """
+    found: list[Path] = []
     for marker in _ARGOCD_MARKER_DIRS:
         argocd_dir = chart_dir / marker
         if not argocd_dir.is_dir():
             continue
         for f in sorted(argocd_dir.glob("*.yaml")):
             if read_argocd_chart_version(f):
-                return f
-    return None
+                found.append(f)
+    return found
+
+
+def _detect_argocd_pin_file(chart_dir: Path) -> Path | None:
+    """Return the component's PRIMARY ArgoCD metadata file, or None.
+
+    First match of _detect_argocd_pin_files. Authoritative for reads (current
+    pin, chart URL, release name, operator label): every marker of one
+    component pins the same version. NOT sufficient for writes.
+    """
+    found = _detect_argocd_pin_files(chart_dir)
+    return found[0] if found else None
 
 
 def _chart_pin_label(helmfile_name: str, argocd_pin_file: Path | None) -> str:
@@ -507,13 +520,48 @@ def _chart_pin_write(
     argocd_pin_file: Path | None,
     current: str,
     new_pin: str,
-) -> None:
-    """Write the new chart pin to the ArgoCD metadata (preferred) or helmfile."""
+) -> tuple[list[Path], list[Path]]:
+    """Write the new chart pin to the ArgoCD metadata (preferred) or helmfile.
+
+    Returns ``(written, skipped)``.
+
+    Fans out across EVERY marker dir of the component, not just the
+    first-match primary. A component enrolled on two delivery tracks carries
+    one metadata file per cluster; bumping only the primary leaves the other
+    cluster pinned to the old chart and the two silently diverge — silently,
+    because the read path is first-match and would keep reporting the bumped
+    version. Note this template does NOT read ``CONFIG.ARGOCD_PIN_FILES``
+    (that is the ``argocd-pin`` template's explicit-list mechanism), so
+    auto-discovery is the only thing standing between a two-track component
+    and that drift.
+
+    ``update_argocd_chart_version`` rewrites only when the file's pin equals
+    ``current``, so a marker deliberately held at another version is left
+    alone and returned in ``skipped`` for the caller to surface rather than
+    being force-matched.
+    """
     if argocd_pin_file is not None:
-        update_argocd_chart_version(argocd_pin_file, current, new_pin)
-        return
+        # argocd_pin_file is <chart_dir>/<marker>/<release>.yaml, so its
+        # grandparent is the component dir holding every marker. The primary
+        # is ALWAYS a target and leads the list: re-discovery is a convenience
+        # for finding its siblings, never a precondition for writing the file
+        # we were handed (a caller that passes a path outside the marker
+        # layout must still get its bump, not a silent no-op).
+        targets = [argocd_pin_file]
+        for f in _detect_argocd_pin_files(argocd_pin_file.parent.parent):
+            if f != argocd_pin_file:
+                targets.append(f)
+        written: list[Path] = []
+        skipped: list[Path] = []
+        for f in targets:
+            if update_argocd_chart_version(f, current, new_pin):
+                written.append(f)
+            else:
+                skipped.append(f)
+        return written, skipped
     assert helmfile_path is not None
     _update_helmfile_chart_pin(helmfile_path, new_pin)
+    return [helmfile_path], []
 
 
 def _require_chart_source_configured(config: dict) -> None:
@@ -796,8 +844,20 @@ def _do_upgrade_chart(
             (bdir / helmfile_name).write_text(helmfile_path.read_text())
             print(f"  Backed up {helmfile_name} to: backup/{timestamp}-chart/")
 
-        _chart_pin_write(helmfile_path, argocd_pin_file, current, target)
-        print(f"  Updated {pin_label} (chart version: {current} -> {target})")
+        written, skipped = _chart_pin_write(
+            helmfile_path, argocd_pin_file, current, target
+        )
+        for f in written:
+            label = (
+                f"{f.parent.name}/{f.name}" if argocd_pin_file is not None
+                else helmfile_name
+            )
+            print(f"  Updated {label} (chart version: {current} -> {target})")
+        for f in skipped:
+            print(
+                f"  WARNING: {f.parent.name}/{f.name} was NOT bumped — its pin "
+                f"is not {current}. Reconcile it by hand."
+            )
 
     if argocd_pin_file is None:
         auto_prune_backups(backup_dir, keep_backups)

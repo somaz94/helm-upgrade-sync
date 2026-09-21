@@ -33,6 +33,60 @@ from .external_standard import run as _run_external_standard
 #   grep -oE ... | head -1 | awk '{print $2}' | sed 's/^v//'
 _TAG_RE = re.compile(r"tag: v(\d+\.\d+\.\d+)")
 
+# `repository: docker.io/goharbor/valkey-photon` (quotes optional, comment allowed).
+_REPOSITORY_RE = re.compile(
+    r"^\s*repository:\s*[\"']?(?P<repo>[^\s\"'#]+)[\"']?\s*(?:#.*)?$", re.MULTILINE
+)
+
+
+def _repository_basenames(text: str) -> set[str]:
+    """Return the last path segment of every ``repository:`` value in ``text``.
+
+    Comparing basenames rather than full references is deliberate: an override
+    legitimately retargets the registry/org (a registry mirror, a custom build), and
+    only the image *name* is the thing upstream can rename underneath us.
+    """
+    return {
+        m.group("repo").rstrip("/").rsplit("/", 1)[-1]
+        for m in _REPOSITORY_RE.finditer(text)
+    }
+
+
+def _warn_repository_drift(*, values_dir: Path, exclude_patterns: str) -> None:
+    """Warn when an override names an image the new upstream values no longer has.
+
+    This template rewrites **tags only** — it never touches ``repository:``.
+    When upstream renames an image, the override keeps the old name and takes
+    the new tag, producing a reference that does not exist. The Harbor chart
+    did exactly this in 1.19.2 (``redis-photon`` -> ``valkey-photon``): the
+    rendered ``goharbor/redis-photon:v2.15.2`` would have gone straight to
+    ImagePullBackOff, and no resource-removal diff check can see it.
+
+    Advisory only: an override may name an image that upstream values never
+    mention (a sidecar, a wholly custom build), so this cannot fail the run
+    without producing false alarms. It prints; the human decides.
+    """
+    upstream = values_dir.parent / "values.yaml"
+    if not upstream.is_file():
+        return
+    upstream_names = _repository_basenames(upstream.read_text())
+    if not upstream_names:
+        return
+    for values_file in sorted(values_dir.glob("*.yaml")):
+        if not values_file.is_file() or _is_excluded(values_file.name, exclude_patterns):
+            continue
+        unknown = sorted(_repository_basenames(values_file.read_text()) - upstream_names)
+        if not unknown:
+            continue
+        print(f"    WARNING: {values_file.name} names image(s) absent from the new "
+              f"upstream values.yaml: {', '.join(unknown)}")
+        print("      This template rewrites tags only, never `repository:`. If upstream "
+              "RENAMED an image, the tag was just bumped onto the OLD name and the "
+              "reference no longer exists (ImagePullBackOff at deploy).")
+        print("      Confirm each rendered reference resolves before merging, e.g.:")
+        print("        helm template <rel> <chart> --version <new> "
+              f"-f {values_file.parent.name}/{values_file.name} | grep 'image:'")
+
 
 def _rewrite_image_tags(
     *,
@@ -80,6 +134,10 @@ def _rewrite_image_tags(
             f"  Updated values/{values_file.name} "
             f"({tag_count} image tag(s): v{values_tag} -> v{latest_app_version})"
         )
+
+    # Tags are now bumped; check that each override still names an image the new
+    # upstream values actually ship. See _warn_repository_drift for why.
+    _warn_repository_drift(values_dir=values_dir, exclude_patterns=exclude_patterns)
 
 
 def run(config: dict, argv: list[str], script_path: str | os.PathLike) -> int:
