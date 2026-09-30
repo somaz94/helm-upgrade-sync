@@ -26,7 +26,9 @@ CR-version flow is structurally different:
     (``<TIMESTAMP>-chart`` dir with helmfile). For a component ArgoCD
     delivers, a chart-pin backup predates the move and is refused, and a
     Stack rollback restores the values file with a downgrade warning (live
-    CR when readable, else the working-tree values file). Otherwise Stack
+    CR when readable, else the working-tree values file) and, on a
+    downgrade, the manual ArgoCD steps (operator marker ``autoSync: false``
+    first — no auto-webhook flow on this path). Otherwise Stack
     rollback detects a version downgrade (vs live CR) and defers to
     :func:`._common_cr.handle_downgrade_rollback` (auto-webhook flow or
     7-step manual instructions).
@@ -73,6 +75,8 @@ from ._common_cr import (
     get_live_cr_version,
     handle_downgrade_rollback,
     http_get,
+    kube_context,
+    read_helmfile_namespace,
     read_yaml_value,
     semver_compare,
     update_yaml_value,
@@ -317,21 +321,76 @@ def _restore_stack_for_argocd(
             f"current version from {basis})."
         )
         print(
-            "  The operator's admission webhook rejects CR downgrades, and the "
-            "operator's own ArgoCD App self-heals a webhook deleted by hand, so pause "
-            "its auto-sync first. The Elastic Stack does not downgrade data a newer "
-            "version has written; a snapshot restore may be the real rollback."
+            "  The Elastic Stack does not downgrade data a newer version has written; "
+            "a snapshot restore may be the real rollback."
         )
         print(
             f"  Nothing is pushed yet: back it out with `git restore "
-            f"{config['VALUES_FILE']}`, or push once that is planned."
+            f"{config['VALUES_FILE']}`, or take these steps:"
         )
+        _print_argocd_downgrade_steps(config, chart_dir, backup_ver)
         return 0
     print(
         "Rollback complete! Review `git diff`, then commit and push — ArgoCD applies "
         "the CR version from the values file."
     )
     return 0
+
+
+def _print_argocd_downgrade_steps(config: dict, chart_dir: Path, backup_ver: str) -> None:
+    """Print the manual CR-downgrade steps for a component ArgoCD delivers.
+
+    The operator's App must stop syncing first, or self-heal recreates the webhook
+    and scales the operator back up. Only its marker can stop it: the
+    ApplicationSet reverts a hand-patched Application.
+    """
+    ctx = kube_context() or "<kube-context>"
+    pin_file = _detect_argocd_pin_file(chart_dir)
+    marker = pin_file.parent.name if pin_file is not None else "argocd*"
+    cr_ns = read_helmfile_namespace(pin_file) or "<ns>"
+    operator_ns = config.get("CR_OPERATOR_NS") or "<operator-ns>"
+    operator_sts = config.get("CR_OPERATOR_STS") or "<operator-sts>"
+    operator_marker = _operator_marker_path(
+        chart_dir, config.get("CR_OPERATOR_CHART_DIR", ""), marker
+    )
+    label = config["COMPONENT_LABEL"]
+    cr = f"kubectl --context {ctx} -n {cr_ns}"
+    print(
+        f"    1. Set `autoSync: false` in {operator_marker}, commit and push only that, "
+        f"and wait until the operator App has no automated sync policy."
+    )
+    print(f"    2. kubectl --context {ctx} -n {operator_ns} scale sts {operator_sts} --replicas=0")
+    print(
+        f"    3. kubectl --context {ctx} delete validatingwebhookconfiguration "
+        f"{config.get('CR_WEBHOOK_NAME') or '<webhook>'} --ignore-not-found"
+    )
+    print(
+        f"    4. Commit and push this rollback; Sync the {label} App in the ArgoCD UI "
+        f"if it does not auto-sync."
+    )
+    # The webhook comes back in step 6 and would reject a sync that has not landed yet.
+    print(f"    5. Confirm the CR took it: {cr} get {label} {label} -o jsonpath='{{.spec.version}}'  # {backup_ver}")
+    print(
+        "    6. Set `autoSync: true` again and push: ArgoCD recreates the webhook and "
+        "scales the operator back up."
+    )
+    # Kibana has no .status.phase, and a stale Ready passes before the operator reconciles.
+    print(
+        f"    7. {cr} wait {label}/{label} "
+        f"--for=jsonpath='{{.status.version}}'={backup_ver} --timeout=600s"
+    )
+
+
+def _operator_marker_path(chart_dir: Path, operator_dir: str, marker: str) -> str:
+    """Operator marker path relative to the component dir, or a pattern when not found."""
+    if operator_dir:
+        for base in (chart_dir, *chart_dir.parents):
+            candidate = base / operator_dir / marker
+            if candidate.is_dir():
+                files = sorted(candidate.glob("*.yaml"))
+                target = files[0] if len(files) == 1 else candidate / "*.yaml"
+                return os.path.relpath(target, chart_dir)
+    return f"{operator_dir or '<operator-dir>'}/{marker}/*.yaml"
 
 
 # =============================================================

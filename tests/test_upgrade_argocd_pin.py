@@ -322,6 +322,17 @@ class ArgocdPinRollbackTests(unittest.TestCase):
         self.assertEqual((self.chart_dir / "values" / "dev.yaml").read_text(), "foo: old\n")
         self.assertFalse((self.chart_dir / "values" / ap.PIN_VERSION_FILE).exists())
 
+    def test_a_mirror_rewritten_values_file_is_named_only_when_restored(self) -> None:
+        # The image-mirror path: dev.yaml came back with the upgraded tag, gone.yaml was not restored.
+        (self.backup / "mirror-rewrote-values").write_text("dev.yaml\ngone.yaml\n")
+        (self.backup / "gone.yaml").write_text("tag: new\n")
+        code, out, _ = self._rollback()
+        self.assertEqual(code, 0)
+        self.assertIn("the image was NOT rolled back", out)
+        self.assertIn("tag in values/dev.yaml when", out)
+        self.assertNotIn("values/gone.yaml when", out)
+        self.assertFalse((self.chart_dir / "values" / "mirror-rewrote-values").exists())
+
     def test_falls_back_to_the_backup_chart_yaml(self) -> None:
         code, out, _ = self._rollback()
         self.assertEqual(code, 0)

@@ -73,6 +73,7 @@ from ._common_helmfile import (
     list_backups as _list_backups,
     print_helmfile_releases as _print_helmfile_releases,
     read_yaml_field as _read_yaml_field,
+    record_mirror_rewrote as _record_mirror_rewrote,
     run_subprocess as _run,
     update_helmfile_pins as _update_helmfile_pins,
     used_top_level_keys as _used_top_level_keys,
@@ -562,6 +563,12 @@ def _default_chart_write(
         print("  Updated values.schema.json")
 
 
+def _read_values_files(values_dir: Path) -> dict[str, bytes]:
+    if not values_dir.is_dir():
+        return {}
+    return {p.name: p.read_bytes() for p in values_dir.glob("*.yaml") if p.is_file()}
+
+
 def _apply_upgrade(
     *,
     config: dict,
@@ -721,6 +728,7 @@ def _apply_upgrade(
     # precedes the Step 7 / dry-run branch in every template).
     print()
 
+    mirror_rewrote: list[str] = []
     # ``external_oci_with_mirror`` mirror stage = Step 7 of 8. Skipped entirely when
     # total_steps==7 (the four baseline templates baseline).
     if total_steps >= 8:
@@ -736,6 +744,7 @@ def _apply_upgrade(
                     f"[Step 7/{total_steps}] Mirroring upstream images to "
                     f"private registry..."
                 )
+                values_before = _read_values_files(values_dir)
                 rc = pre_apply_hook(
                     chart_dir=chart_dir,
                     temp_dir=temp_dir,
@@ -751,6 +760,11 @@ def _apply_upgrade(
                         file=sys.stderr,
                     )
                     return rc
+                mirror_rewrote = sorted(
+                    name
+                    for name, data in _read_values_files(values_dir).items()
+                    if values_before.get(name) != data
+                )
             else:
                 print(
                     f"[Step 7/{total_steps}] Mirror stage skipped "
@@ -797,6 +811,9 @@ def _apply_upgrade(
             if _is_excluded(values_file.name, exclude_patterns):
                 continue
             shutil.copy2(values_file, backup_target / values_file.name)
+    _record_mirror_rewrote(
+        backup_target, [n for n in mirror_rewrote if (backup_target / n).is_file()]
+    )
 
     print(f"  Backed up to: backup/{timestamp}/")
     for entry in sorted(backup_target.iterdir()):

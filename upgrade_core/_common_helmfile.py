@@ -23,10 +23,12 @@ Exported helpers — all stdlib-only:
 - :func:`update_helmfile_pins` — bash sed-based 4 expression replacement.
 - :func:`list_backups` — chart-flavored backup listing (reads `Chart.yaml`
   from each backup dir).
+- :func:`record_mirror_rewrote` — marks a backup whose values files the
+  image-mirror step had already rewritten.
 - :func:`restore_backup_files` — the file-copy half of a rollback, shared
   with the argocd-pin rollback.
-- :func:`do_rollback` — chart-flavored rollback (restores Chart.yaml +
-  values.yaml + helmfile.yaml[.gotmpl] + per-env values/*.yaml).
+- :func:`do_rollback` — chart-flavored rollback (prompt, then
+  :func:`restore_backup_files`).
 """
 
 from __future__ import annotations
@@ -255,6 +257,21 @@ def list_backups(backup_dir: Path) -> None:
     print_backup_list(backup_dir, describe)
 
 
+# Not *.yaml: a rollback treats every top-level *.yaml of a backup as a values file.
+MIRROR_REWROTE_FILE = "mirror-rewrote-values"
+
+
+def record_mirror_rewrote(backup_target: Path, names: list[str]) -> None:
+    """Record which backed-up values files the image-mirror step had already rewritten."""
+    if not names:
+        return
+    (backup_target / MIRROR_REWROTE_FILE).write_text("".join(f"{n}\n" for n in names))
+    print(
+        f"  Note: the mirror step already set the new image tag in "
+        f"{', '.join(f'values/{n}' for n in names)}; a rollback keeps it"
+    )
+
+
 def restore_backup_files(
     selected: Path,
     chart_dir: Path,
@@ -273,6 +290,12 @@ def restore_backup_files(
     ``restore_helmfile=False`` is for components ArgoCD delivers: their helmfile
     is retired or a bootstrap recipe the upgrade never rewrites, so the backed-up
     copy can only resurrect a retired file or undo later edits to the recipe.
+    A backed-up helmfile whose name differs from the one the component uses now
+    (a ``.yaml`` -> ``.gotmpl`` switch since) is skipped with a pin warning.
+
+    Values files the image-mirror step rewrote before the backup was taken
+    (``MIRROR_REWROTE_FILE``) come back with the upgraded image tag, so the
+    image is not rolled back; a warning names them.
     """
     src = selected / "Chart.yaml"
     if src.is_file():
@@ -289,16 +312,26 @@ def restore_backup_files(
         shutil.copy2(src, chart_dir / "values.schema.json")
         print("  Restored values.schema.json")
 
+    _, current_helmfile = detect_helmfile(chart_dir)
     for name in ("helmfile.yaml.gotmpl", "helmfile.yaml"):
         if not (selected / name).is_file():
             continue
         if not restore_helmfile:
             print(f"  Skipped {name} (ArgoCD delivers this component; it is not the deploy path)")
+        elif current_helmfile and name != current_helmfile:
+            # Copied back, it would sit beside the current one, and helmfile refuses to run with both.
+            target = read_yaml_field(selected / "Chart.yaml", "version").strip("\"'")
+            print(
+                f"  WARNING: skipped {name} (the component now uses {current_helmfile}); "
+                f"its chart pin was NOT rolled back — set it to "
+                f"{target or 'the backed-up chart version'} by hand."
+            )
         else:
             shutil.copy2(selected / name, chart_dir / name)
             print(f"  Restored {name}")
         break
 
+    restored: set[str] = set()
     for entry in sorted(selected.glob("*.yaml")):
         name = entry.name
         if name in ("Chart.yaml", "values.yaml", "helmfile.yaml"):
@@ -307,14 +340,26 @@ def restore_backup_files(
             print(f"  Skipped values/{name} (no longer in values/; if renamed, roll the new file back by hand)")
             continue
         shutil.copy2(entry, values_dir / name)
+        restored.add(name)
         print(f"  Restored values/{name}")
+
+    rewrote = selected / MIRROR_REWROTE_FILE
+    kept_tags = [n for n in rewrote.read_text().split() if n in restored] if rewrote.is_file() else []
+    if kept_tags:
+        names = ", ".join(f"values/{n}" for n in kept_tags)
+        # Decided 2026-09-30: the backup stays after the mirror step; a database image rarely downgrades in place.
+        print(
+            f"  WARNING: the image was NOT rolled back — the mirror step had already set the new "
+            f"tag in {names} when this backup was taken. If the image can downgrade in place, "
+            f"take the previous tag from `git log -p -- values/`."
+        )
 
 
 def do_rollback(backup_dir: Path, chart_dir: Path, values_dir: Path) -> None:
     """Chart-flavored rollback for helmfile-using templates.
 
-    Restores Chart.yaml + values.yaml + helmfile.yaml[.gotmpl] + every
-    other ``*.yaml`` in the selected backup into ``values_dir``.
+    Prompts for a backup and restores it with :func:`restore_backup_files`,
+    which says what it skips.
     """
     backups = sorted_backups(backup_dir)
     if not backups:

@@ -321,6 +321,34 @@ class RollbackTests(unittest.TestCase):
             es._do_rollback(self.backup, self.chart_dir, self.values_dir)
         self.assertEqual((self.values_dir / "retired.yaml").read_text(), "gone\n")
 
+    def test_a_retired_helmfile_variant_is_not_restored(self) -> None:
+        # Beside the current .gotmpl, a restored helmfile.yaml makes helmfile refuse to run.
+        self._make_backup("20260520_120000", {"Chart.yaml": "version: 1.0.0\n", "helmfile.yaml": "old\n"})
+        (self.chart_dir / "helmfile.yaml.gotmpl").write_text("current\n")
+        buf = io.StringIO()
+        with mock.patch("builtins.input", return_value=""), redirect_stdout(buf):
+            es._do_rollback(self.backup, self.chart_dir, self.values_dir)
+        self.assertFalse((self.chart_dir / "helmfile.yaml").exists())
+        self.assertEqual((self.chart_dir / "helmfile.yaml.gotmpl").read_text(), "current\n")
+        self.assertIn("skipped helmfile.yaml (the component now uses helmfile.yaml.gotmpl)", buf.getvalue())
+        self.assertIn("set it to 1.0.0 by hand", buf.getvalue())
+
+    def test_the_current_helmfile_variant_is_restored(self) -> None:
+        self._make_backup("20260520_120000", {"helmfile.yaml.gotmpl": "old\n"})
+        (self.chart_dir / "helmfile.yaml.gotmpl").write_text("current\n")
+        with mock.patch("builtins.input", return_value=""), redirect_stdout(io.StringIO()):
+            es._do_rollback(self.backup, self.chart_dir, self.values_dir)
+        self.assertEqual((self.chart_dir / "helmfile.yaml.gotmpl").read_text(), "old\n")
+
+    def test_a_mirror_rewritten_backup_warns_the_image_stays(self) -> None:
+        self._make_backup("20260520_120000", {"dev.yaml": "tag: new\n", "mirror-rewrote-values": "dev.yaml\n"})
+        buf = io.StringIO()
+        with mock.patch("builtins.input", return_value=""), redirect_stdout(buf):
+            es._do_rollback(self.backup, self.chart_dir, self.values_dir)
+        self.assertIn("the image was NOT rolled back", buf.getvalue())
+        self.assertIn("values/dev.yaml", buf.getvalue())
+        self.assertFalse((self.values_dir / "mirror-rewrote-values").exists())
+
     def test_the_schema_mirror_follows_chart_yaml(self) -> None:
         self._make_backup("20260520_120000", {"values.schema.json": "{\"old\": true}"})
         (self.chart_dir / "values.schema.json").write_text("{\"new\": true}")
@@ -877,6 +905,45 @@ class RunFlowTests(unittest.TestCase):
             "[Step 8/8] Applying upgrade...",
         ):
             self.assertIn(expected, out, f"missing header line: {expected!r}")
+
+    def _run_with_mirror(self, hook) -> str:
+        buf = io.StringIO()
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(self._k10_handler())):
+            with redirect_stdout(buf):
+                rc = es.run(self.config, [], self.script, total_steps=8, pre_apply_hook=hook)
+        self.assertEqual(rc, 0)
+        return buf.getvalue()
+
+    def test_a_mirror_that_rewrites_values_marks_the_backup(self) -> None:
+        def hook(*, values_dir, **_):
+            (values_dir / "dev.yaml").write_text("image:\n  tag: new\n")
+            return 0
+
+        out = self._run_with_mirror(hook)
+        (backup,) = (self.chart_dir / "backup").iterdir()
+        self.assertEqual((backup / "mirror-rewrote-values").read_text(), "dev.yaml\n")
+        self.assertEqual((backup / "dev.yaml").read_text(), "image:\n  tag: new\n")
+        self.assertIn("a rollback keeps it", out)
+
+    def test_an_excluded_values_file_is_not_named(self) -> None:
+        # Not in the backup, so a rollback never restores it and has nothing to warn about.
+        (self.chart_dir / "values" / "dev-old.yaml").write_text("image:\n  tag: a\n")
+
+        def hook(*, values_dir, **_):
+            (values_dir / "dev-old.yaml").write_text("image:\n  tag: b\n")
+            return 0
+
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(self._k10_handler())):
+            with redirect_stdout(io.StringIO()):
+                rc = es.run(self.config, ["--exclude", "old"], self.script, total_steps=8, pre_apply_hook=hook)
+        self.assertEqual(rc, 0)
+        (backup,) = (self.chart_dir / "backup").iterdir()
+        self.assertFalse((backup / "mirror-rewrote-values").exists())
+
+    def test_a_mirror_that_leaves_values_alone_marks_nothing(self) -> None:
+        self._run_with_mirror(mock.Mock(return_value=0))
+        (backup,) = (self.chart_dir / "backup").iterdir()
+        self.assertFalse((backup / "mirror-rewrote-values").exists())
 
     def test_pre_apply_hook_non_zero_aborts_and_propagates_rc(self) -> None:
         """``external_oci_with_mirror`` mirror failure: hook returns rc -> _apply_upgrade returns

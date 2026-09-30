@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -494,6 +495,50 @@ class RollbackTests(unittest.TestCase):
         self.assertIn("git restore values/dev.yaml", out)
         self.assertNotIn("Rollback complete!", out)
         self.live.assert_called_once_with("elasticsearch", self.chart_dir / "argocd" / "elasticsearch.yaml")
+
+    def test_a_downgrade_prints_the_argocd_steps(self) -> None:
+        self._argocd()
+        (self.chart_dir / "argocd" / "elasticsearch.yaml").write_text(
+            'namespace: logging\nchart:\n  name: elasticsearch-eck\n  version: "0.3.3"\n'
+        )
+        operator_marker = self.tmp / "eck-operator" / "argocd"
+        operator_marker.mkdir(parents=True)
+        (operator_marker / "eck-operator.yaml").write_text("autoSync: true\n")
+        self._stack_backup("9.5.1")
+        config = {**self.CONFIG, "CR_OPERATOR_NS": "elastic-system", "CR_OPERATOR_STS": "elastic-operator",
+                  "CR_WEBHOOK_NAME": "elastic-webhook", "CR_OPERATOR_CHART_DIR": "eck-operator"}
+        out = io.StringIO()
+        with mock.patch("builtins.input", return_value=""), redirect_stdout(out), \
+             mock.patch.dict(os.environ, {"KUBE_CONTEXT": "ctx-a"}):
+            code = ecv._do_rollback(config, self.chart_dir, self.backup_dir, None)
+        out = out.getvalue()
+        self.assertEqual(code, 0)
+        # The ApplicationSet reverts a hand-patched App, so the pause goes through the marker.
+        self.assertIn("1. Set `autoSync: false` in ../eck-operator/argocd/eck-operator.yaml", out)
+        self.assertIn("2. kubectl --context ctx-a -n elastic-system scale sts elastic-operator --replicas=0", out)
+        self.assertIn("3. kubectl --context ctx-a delete validatingwebhookconfiguration elastic-webhook", out)
+        self.assertIn("5. Confirm the CR took it: kubectl --context ctx-a -n logging get elasticsearch "
+                      "elasticsearch -o jsonpath='{.spec.version}'  # 9.5.1", out)
+        self.assertIn("6. Set `autoSync: true` again and push", out)
+        # .status.version, not .status.phase: Kibana has no phase.
+        self.assertIn("7. kubectl --context ctx-a -n logging wait elasticsearch/elasticsearch "
+                      "--for=jsonpath='{.status.version}'=9.5.1", out)
+        self.assertNotIn("helmfile", out)
+
+    def test_the_argocd_steps_leave_placeholders_when_unconfigured(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch.dict(os.environ, {"KUBE_CONTEXT": ""}):
+            ecv._print_argocd_downgrade_steps({"COMPONENT_LABEL": "kibana"}, self.chart_dir, "9.5.1")
+        out = out.getvalue()
+        self.assertIn("<operator-dir>/argocd*/*.yaml", out)
+        self.assertIn("kubectl --context <kube-context> -n <operator-ns> scale sts <operator-sts>", out)
+        self.assertIn("-n <ns> wait kibana/kibana --for=jsonpath='{.status.version}'=9.5.1", out)
+
+    def test_an_operator_dir_without_the_marker_falls_back_to_a_pattern(self) -> None:
+        (self.tmp / "eck-operator" / "argocd-aws").mkdir(parents=True)
+        self.assertEqual(
+            ecv._operator_marker_path(self.chart_dir, "eck-operator", "argocd"), "eck-operator/argocd/*.yaml"
+        )
 
     def test_the_live_cr_decides_when_readable(self) -> None:
         # A bump whose sync failed: git says 9.5.4, the cluster still runs 9.5.1.
