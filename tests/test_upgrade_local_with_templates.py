@@ -549,6 +549,41 @@ class RollbackHelmfileTests(unittest.TestCase):
         self.assertEqual((self.chart_dir / "helmfile.yaml.gotmpl").read_text(), "gotmpl: true\n")
         self.assertFalse((self.chart_dir / "helmfile.yaml").exists())
 
+    def test_a_values_file_the_component_keeps_is_restored(self) -> None:
+        (self.chart_dir / "values" / "dev.yaml").write_text("new: true\n")
+        out = self._rollback()
+        self.assertEqual((self.chart_dir / "values" / "dev.yaml").read_text(), "old: true\n")
+        self.assertNotIn("Skipped values/dev.yaml", out)
+
+    def test_a_values_file_the_component_dropped_is_not_revived(self) -> None:
+        (self.chart_dir / "argocd-local").mkdir()
+        out = self._rollback()
+        self.assertFalse((self.chart_dir / "values" / "dev.yaml").exists())
+        self.assertIn("Skipped values/dev.yaml (no longer in values/", out)
+
+    def test_a_helmfile_rollback_restores_the_whole_snapshot(self) -> None:
+        self._rollback()
+        self.assertEqual((self.chart_dir / "values" / "dev.yaml").read_text(), "old: true\n")
+
+    def test_the_schema_mirror_follows_chart_yaml(self) -> None:
+        backup = self.chart_dir / "backup" / "20260101_000000"
+        (backup / "values.schema.json").write_text('{"old": true}')
+        (self.chart_dir / "values.schema.json").write_text('{"new": true}')
+        self._rollback()
+        self.assertEqual((self.chart_dir / "values.schema.json").read_text(), '{"old": true}')
+
+    def test_a_component_without_a_schema_gets_none(self) -> None:
+        (self.chart_dir / "backup" / "20260101_000000" / "values.schema.json").write_text("{}")
+        self._rollback()
+        self.assertFalse((self.chart_dir / "values.schema.json").exists())
+
+    def test_next_steps_follow_the_delivery_path(self) -> None:
+        self.assertIn("   3. Run: helmfile apply", lwt._next_steps(self.chart_dir))
+        (self.chart_dir / "argocd-local").mkdir()
+        steps = lwt._next_steps(self.chart_dir)
+        self.assertTrue(any("commit and push" in s for s in steps))
+        self.assertFalse(any("helmfile" in s for s in steps))
+
     def test_a_helmfile_delivered_component_still_gets_it_back(self) -> None:
         out = self._rollback()
         self.assertEqual((self.chart_dir / "helmfile.yaml").read_text(), "hooks: [old]\n")

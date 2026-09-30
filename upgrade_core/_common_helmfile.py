@@ -233,6 +233,15 @@ def align_kept_helmfile_pin(chart_dir: Path, have: str, target: str) -> None:
             )
 
 
+def kept_helmfile_literal_pin(chart_dir: Path) -> str:
+    """Name of a helmfile on disk that pins a literal chart version, or ""."""
+    for name in ("helmfile.yaml.gotmpl", "helmfile.yaml"):
+        path = chart_dir / name
+        if path.is_file() and _LITERAL_PIN_RE.search(path.read_text()):
+            return name
+    return ""
+
+
 def list_backups(backup_dir: Path) -> None:
     """Chart-flavored backup listing — reads Chart.yaml.version for each entry."""
 
@@ -255,6 +264,12 @@ def restore_backup_files(
 ) -> None:
     """Copy one backup's Chart.yaml, values.yaml, helmfile and values/*.yaml back.
 
+    ``values.schema.json`` follows Chart.yaml when the component keeps a schema
+    mirror. With ``restore_helmfile=False`` only the values files the component
+    still has come back (one deleted since the backup was deliberate; an upgrade
+    never removes one); a helmfile rollback restores the whole snapshot, because
+    the old helmfile may reference files deleted since.
+
     ``restore_helmfile=False`` is for components ArgoCD delivers: their helmfile
     is retired or a bootstrap recipe the upgrade never rewrites, so the backed-up
     copy can only resurrect a retired file or undo later edits to the recipe.
@@ -269,6 +284,11 @@ def restore_backup_files(
         shutil.copy2(src, chart_dir / "values.yaml")
         print("  Restored values.yaml")
 
+    src = selected / "values.schema.json"
+    if src.is_file() and (chart_dir / "values.schema.json").is_file():
+        shutil.copy2(src, chart_dir / "values.schema.json")
+        print("  Restored values.schema.json")
+
     for name in ("helmfile.yaml.gotmpl", "helmfile.yaml"):
         if not (selected / name).is_file():
             continue
@@ -282,6 +302,9 @@ def restore_backup_files(
     for entry in sorted(selected.glob("*.yaml")):
         name = entry.name
         if name in ("Chart.yaml", "values.yaml", "helmfile.yaml"):
+            continue
+        if not restore_helmfile and not (values_dir / name).is_file():
+            print(f"  Skipped values/{name} (no longer in values/; if renamed, roll the new file back by hand)")
             continue
         shutil.copy2(entry, values_dir / name)
         print(f"  Restored values/{name}")

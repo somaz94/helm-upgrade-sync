@@ -513,6 +513,17 @@ class RollbackTests(unittest.TestCase):
         _, out, _ = self._rollback()
         self.assertIn("(9.5.4 -> 9.5.1, current version from the live CR)", out)
 
+    def test_stack_next_steps_follow_the_delivery_path(self) -> None:
+        pin = self.chart_dir / "argocd" / "elasticsearch.yaml"
+        argocd_steps = ecv._stack_next_steps("elasticsearch", "", pin)
+        self.assertIn("argocd/elasticsearch.yaml", argocd_steps[0])
+        self.assertTrue(any("commit and push" in s for s in argocd_steps))
+        self.assertFalse(any("helmfile" in s for s in argocd_steps))
+        helmfile_steps = ecv._stack_next_steps("elasticsearch", "helmfile.yaml", None)
+        self.assertIn("helmfile.yaml", helmfile_steps[0])
+        self.assertIn("   3. Run: helmfile apply", helmfile_steps)
+        self.assertTrue(all("--context <ctx>" in s[-1] for s in (argocd_steps, helmfile_steps)))
+
     def test_a_helmfile_component_keeps_the_webhook_flow(self) -> None:
         self._stack_backup("9.5.1")
         self.live.return_value = "9.5.4"

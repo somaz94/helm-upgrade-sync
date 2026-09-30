@@ -255,6 +255,11 @@ def _do_rollback(
         shutil.copy2(values_yaml, chart_dir / "values.yaml")
         print("  Restored values.yaml")
 
+    schema = selected / "values.schema.json"
+    if schema.is_file() and (chart_dir / "values.schema.json").is_file():
+        shutil.copy2(schema, chart_dir / "values.schema.json")
+        print("  Restored values.schema.json")
+
     argocd_delivered = _has_argocd_marker(chart_dir)
     for name in ("helmfile.yaml.gotmpl", "helmfile.yaml"):
         if not (selected / name).is_file():
@@ -296,6 +301,11 @@ def _do_rollback(
         if not entry.is_file() or entry.suffix != ".yaml":
             continue
         if entry.name in {"Chart.yaml", "values.yaml", "helmfile.yaml"}:
+            continue
+        # ArgoCD renders from git, so a file deleted since the backup was deliberate; a helmfile
+        # rollback keeps the whole snapshot because the old helmfile may reference it.
+        if argocd_delivered and not (values_dir / entry.name).is_file():
+            print(f"  Skipped values/{entry.name} (no longer in values/; if renamed, roll the new file back by hand)")
             continue
         shutil.copy2(entry, values_dir / entry.name)
         print(f"  Restored values/{entry.name}")
@@ -930,10 +940,20 @@ def _apply_upgrade(
                 "   - templates/_pod.tpl (PVC patch)",
             ]
         ],
-        next_steps=[
-            "   1. Review values/ files for any needed changes",
-            "   2. Run: helmfile diff",
-            "   3. Run: helmfile apply",
-        ],
+        next_steps=_next_steps(chart_dir),
     )
     return 0
+
+
+def _next_steps(chart_dir: Path) -> list[str]:
+    if _has_argocd_marker(chart_dir):
+        return [
+            "   1. Review values/ files for any needed changes",
+            "   2. Review `git diff`, then commit and push — ArgoCD renders this vendored chart from git",
+            "      (auto-sync, or Sync in the UI when autoSync is off)",
+        ]
+    return [
+        "   1. Review values/ files for any needed changes",
+        "   2. Run: helmfile diff",
+        "   3. Run: helmfile apply",
+    ]

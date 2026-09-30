@@ -954,11 +954,11 @@ def _do_upgrade_chart(
     if argocd_pin_file is not None:
         print(f"   1. Review: git diff {pin_label}")
         print("   2. Commit + push — ArgoCD auto-sync applies the new chart version.")
-        print(f"   3. Watch CR: kubectl -n <ns> get {component_label} -w")
+        print(f"   3. Watch CR: kubectl --context <ctx> -n <ns> get {component_label} -w")
     else:
         print("   1. Run: helmfile diff")
         print("   2. Run: helmfile apply")
-        print(f"   3. Watch CR: kubectl -n <ns> get {component_label} -w")
+        print(f"   3. Watch CR: kubectl --context <ctx> -n <ns> get {component_label} -w")
     print()
     print(" To rollback the chart pin:")
     if argocd_pin_file is not None:
@@ -985,6 +985,22 @@ def _find_chart_root(parent: Path) -> Path | None:
 # =============================================================
 # Main stack-version flow (Steps 1-7)
 # =============================================================
+
+def _stack_next_steps(
+    component_label: str, helmfile_name: str, argocd_pin_file: Path | None
+) -> list[str]:
+    watch = f"Watch CR: kubectl --context <ctx> -n <ns> get {component_label} -w"
+    steps = [
+        f"   1. Verify the OCI chart pin in {_chart_pin_label(helmfile_name, argocd_pin_file)} "
+        f"supports this version."
+    ]
+    if argocd_pin_file is not None:
+        return steps + [
+            "   2. Review `git diff`, then commit and push — ArgoCD applies the CR version.",
+            f"   3. {watch}",
+        ]
+    return steps + ["   2. Run: helmfile diff", "   3. Run: helmfile apply", f"   4. {watch}"]
+
 
 def _stack_upgrade(
     config: dict,
@@ -1092,7 +1108,10 @@ def _stack_upgrade(
         f"  * Verify the currently installed operator supports {component_label} {latest_version}."
     )
     print("  * For Stack major bumps (e.g. 8.x -> 9.x) review breaking changes before applying.")
-    print(f"  * Verify the OCI chart pin in {helmfile_name} supports this component version.")
+    print(
+        f"  * Verify the OCI chart pin in {_chart_pin_label(helmfile_name, argocd_pin_file)} "
+        f"supports this component version."
+    )
 
     if dep_kind and dep_name:
         print()
@@ -1148,10 +1167,8 @@ def _stack_upgrade(
     print(f" Changelog: {changelog_url}")
     print()
     print(" Next steps:")
-    print(f"   1. Verify the OCI chart pin in {helmfile_name} supports this version.")
-    print("   2. Run: helmfile diff")
-    print("   3. Run: helmfile apply")
-    print(f"   4. Watch CR: kubectl -n <ns> get {component_label} -w")
+    for line in _stack_next_steps(component_label, helmfile_name, argocd_pin_file):
+        print(line)
     print()
     print(" To rollback:")
     print("   ./upgrade.py --rollback")

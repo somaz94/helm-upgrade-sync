@@ -65,7 +65,7 @@ from ._common import (
 from .external_oci_with_mirror import run as _run_oci_with_mirror
 from .external_standard import run as _run_external_standard
 
-# Not *.yaml: a rollback copies every top-level *.yaml of a backup into values/.
+# Not *.yaml: a rollback treats every top-level *.yaml of a backup as a values file.
 PIN_VERSION_FILE = "argocd-pin-version"
 
 

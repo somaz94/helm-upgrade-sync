@@ -314,6 +314,26 @@ class RollbackTests(unittest.TestCase):
         self.assertEqual((self.chart_dir / "helmfile.yaml").read_text(), "old\n")
         self.assertEqual((self.values_dir / "dev.yaml").read_text(), "from-backup\n")
 
+    def test_a_helmfile_rollback_restores_the_whole_snapshot(self) -> None:
+        # The restored helmfile may still reference a values file deleted since the backup.
+        self._make_backup("20260520_120000", {"helmfile.yaml": "old\n", "retired.yaml": "gone\n"})
+        with mock.patch("builtins.input", return_value=""), redirect_stdout(io.StringIO()):
+            es._do_rollback(self.backup, self.chart_dir, self.values_dir)
+        self.assertEqual((self.values_dir / "retired.yaml").read_text(), "gone\n")
+
+    def test_the_schema_mirror_follows_chart_yaml(self) -> None:
+        self._make_backup("20260520_120000", {"values.schema.json": "{\"old\": true}"})
+        (self.chart_dir / "values.schema.json").write_text("{\"new\": true}")
+        with mock.patch("builtins.input", return_value=""), redirect_stdout(io.StringIO()):
+            es._do_rollback(self.backup, self.chart_dir, self.values_dir)
+        self.assertEqual((self.chart_dir / "values.schema.json").read_text(), "{\"old\": true}")
+
+    def test_a_component_without_a_schema_gets_none(self) -> None:
+        self._make_backup("20260520_120000", {"values.schema.json": "{}"})
+        with mock.patch("builtins.input", return_value=""), redirect_stdout(io.StringIO()):
+            es._do_rollback(self.backup, self.chart_dir, self.values_dir)
+        self.assertFalse((self.chart_dir / "values.schema.json").exists())
+
     def test_invalid_selection_exits(self) -> None:
         self._make_backup("20260520_120000", {"Chart.yaml": "version: 1.0.0\n"})
         with mock.patch("builtins.input", return_value="abc"):

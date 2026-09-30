@@ -69,6 +69,7 @@ from ._common_helmfile import (
     do_rollback as _do_rollback,
     extract_top_keys as _extract_top_keys,
     helm as _helm,
+    kept_helmfile_literal_pin as _kept_helmfile_literal_pin,
     list_backups as _list_backups,
     print_helmfile_releases as _print_helmfile_releases,
     read_yaml_field as _read_yaml_field,
@@ -888,10 +889,29 @@ def _apply_upgrade(
         config,
         current_version,
         latest_version,
-        next_steps=[
-            "   1. Review values/ files for any needed changes",
-            "   2. Run: helmfile diff",
-            "   3. Run: helmfile apply",
-        ],
+        next_steps=(
+            _argocd_next_steps(chart_dir, latest_version)
+            if pin_write_hook is not None
+            else [
+                "   1. Review values/ files for any needed changes",
+                "   2. Run: helmfile diff",
+                "   3. Run: helmfile apply",
+            ]
+        ),
     )
     return 0
+
+
+def _argocd_next_steps(chart_dir: Path, latest_version: str) -> list[str]:
+    steps = ["Review values/ files for any needed changes"]
+    kept = _kept_helmfile_literal_pin(chart_dir)
+    if kept:
+        steps.append(
+            f"Set the chart pin in {kept} to {latest_version} by hand — a hand-synced "
+            f"bootstrap copy the upgrade does not touch (see its header)"
+        )
+    steps.append(
+        "Review `git diff`, then commit and push — ArgoCD applies chart.version from the "
+        "pin file(s) (auto-sync, or Sync in the UI when autoSync is off)"
+    )
+    return [f"   {i}. {s}" for i, s in enumerate(steps, start=1)]

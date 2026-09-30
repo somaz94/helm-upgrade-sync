@@ -236,6 +236,21 @@ class ArgocdPinApplyTests(unittest.TestCase):
         self.assertIn('  version: "1.1.0"', self.release.read_text())
         # Local Chart.yaml mirror also refreshed to the new version.
         self.assertIn("version: 1.1.0", (self.chart_dir / "Chart.yaml").read_text())
+        # The next step is a push, not a helmfile run.
+        self.assertIn("commit and push — ArgoCD applies chart.version", out)
+        self.assertNotIn("Run: helmfile", out)
+
+    def test_apply_footer_asks_for_the_hand_synced_bootstrap_pin(self) -> None:
+        (self.chart_dir / "helmfile.yaml").write_text("releases:\n  - name: x\n    version: 1.0.0\n")
+        buf = io.StringIO()
+        with mock.patch("subprocess.run", side_effect=_fake_subprocess(self._handler)):
+            with redirect_stdout(buf):
+                rc = ap.run(self.config, [], self.script)
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("   2. Set the chart pin in helmfile.yaml to 1.1.0 by hand", out)
+        self.assertIn("   3. Review `git diff`, then commit and push", out)
+        self.assertIn("version: 1.0.0", (self.chart_dir / "helmfile.yaml").read_text())
 
     def test_apply_records_the_pre_upgrade_pin_in_the_backup(self) -> None:
         with mock.patch("subprocess.run", side_effect=_fake_subprocess(self._handler)):
@@ -393,6 +408,14 @@ class ArgocdPinRollbackTests(unittest.TestCase):
         self.assertEqual((self.chart_dir / "helmfile.yaml.gotmpl").read_text(), gotmpl)
         self.assertNotIn("helmfile.yaml.gotmpl", out)
 
+    def test_a_values_file_dropped_since_the_backup_is_not_revived(self) -> None:
+        (self.backup / "retired.yaml").write_text("gone: true\n")
+        code, out, _ = self._rollback()
+        self.assertEqual(code, 0)
+        self.assertEqual((self.chart_dir / "values" / "dev.yaml").read_text(), "foo: old\n")
+        self.assertFalse((self.chart_dir / "values" / "retired.yaml").exists())
+        self.assertIn("Skipped values/retired.yaml (no longer in values/", out)
+
     def test_list_backups_shows_the_pin_each_backup_restores(self) -> None:
         (self.backup / ap.PIN_VERSION_FILE).write_text("1.0.0\n")
         out = io.StringIO()
@@ -469,6 +492,8 @@ class HelmfilePathUnaffectedTests(unittest.TestCase):
             with redirect_stdout(buf):
                 rc = es.run(config, [], script)  # no pin_write_hook
         self.assertEqual(rc, 0)
+        self.assertIn("   3. Run: helmfile apply", buf.getvalue())
+        self.assertNotIn("commit and push", buf.getvalue())
         # Helmfile pin flipped via the default path.
         self.assertIn("version: 1.1.0", helmfile.read_text())
         import shutil
