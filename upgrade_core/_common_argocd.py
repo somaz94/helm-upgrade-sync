@@ -28,6 +28,7 @@ Exported helpers — all stdlib-only:
 - :func:`read_argocd_release_name` — top-level ``releaseName`` value.
 - :func:`update_argocd_chart_version` — in-place flip of one file's pin.
 - :func:`update_argocd_pins` — flip a list of files (multi-release).
+- :func:`has_argocd_marker` — whether ArgoCD delivers the component at all.
 """
 
 from __future__ import annotations
@@ -215,3 +216,16 @@ def update_argocd_pins(
     for f in argocd_files:
         total += update_argocd_chart_version(f, current_version, latest_version)
     return total
+
+
+def has_argocd_marker(chart_dir: Path) -> bool:
+    """True when any ``argocd*/`` marker dir exists — ArgoCD delivers the component.
+
+    Such a component's helmfile, if one is still on disk, is a render reference or a
+    new-cluster bootstrap recipe, so a rollback must never write one back. A marker
+    parked under ``_pending/`` does not count: nothing delivers it yet. The marker only
+    stands in for "the helmfile is not the deploy path", which a self-managed ArgoCD
+    (bootstrapped from its own helmfile) breaks, so only templates whose consumers are
+    all ArgoCD-delivered use it.
+    """
+    return any(p.is_dir() for p in chart_dir.glob("argocd*"))

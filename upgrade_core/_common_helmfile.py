@@ -23,6 +23,8 @@ Exported helpers — all stdlib-only:
 - :func:`update_helmfile_pins` — bash sed-based 4 expression replacement.
 - :func:`list_backups` — chart-flavored backup listing (reads `Chart.yaml`
   from each backup dir).
+- :func:`restore_backup_files` — the file-copy half of a rollback, shared
+  with the argocd-pin rollback.
 - :func:`do_rollback` — chart-flavored rollback (restores Chart.yaml +
   values.yaml + helmfile.yaml[.gotmpl] + per-env values/*.yaml).
 """
@@ -202,6 +204,35 @@ def update_helmfile_pins(
     return pins
 
 
+_LITERAL_PIN_RE = re.compile(
+    r'^[ \t]+version:[ \t]+"?\d|\$chartVersion[ \t]*:=[ \t]+"\d', re.MULTILINE
+)
+
+
+def align_kept_helmfile_pin(chart_dir: Path, have: str, target: str) -> None:
+    """Move the chart pin of a helmfile kept on disk from ``have`` to ``target``.
+
+    For rollbacks that never copy a helmfile out of the backup (ArgoCD delivers
+    the component, and an old copy can hold hooks removed since): the kept file's
+    pin follows the chart the way an upgrade's pin rewrite does. A literal pin
+    already off ``have`` is only reported, since nothing says which one is right.
+    """
+    have, target = have.strip("\"'"), target.strip("\"'")
+    if not have or not target or have == target:
+        return
+    for name in ("helmfile.yaml.gotmpl", "helmfile.yaml"):
+        path = chart_dir / name
+        if not path.is_file():
+            continue
+        if update_helmfile_pins(path, have, target):
+            print(f"  Updated {name} chart pin {have} -> {target}")
+        elif _LITERAL_PIN_RE.search(path.read_text()):
+            print(
+                f"  WARNING: {name} pins a chart version other than {have}; set it "
+                f"to {target} by hand if it tracks this chart."
+            )
+
+
 def list_backups(backup_dir: Path) -> None:
     """Chart-flavored backup listing — reads Chart.yaml.version for each entry."""
 
@@ -213,6 +244,47 @@ def list_backups(backup_dir: Path) -> None:
         return f"(Chart: {chart_ver}) — {backup_file_names(d)}"
 
     print_backup_list(backup_dir, describe)
+
+
+def restore_backup_files(
+    selected: Path,
+    chart_dir: Path,
+    values_dir: Path,
+    *,
+    restore_helmfile: bool = True,
+) -> None:
+    """Copy one backup's Chart.yaml, values.yaml, helmfile and values/*.yaml back.
+
+    ``restore_helmfile=False`` is for components ArgoCD delivers: their helmfile
+    is retired or a bootstrap recipe the upgrade never rewrites, so the backed-up
+    copy can only resurrect a retired file or undo later edits to the recipe.
+    """
+    src = selected / "Chart.yaml"
+    if src.is_file():
+        shutil.copy2(src, chart_dir / "Chart.yaml")
+        print("  Restored Chart.yaml")
+
+    src = selected / "values.yaml"
+    if src.is_file():
+        shutil.copy2(src, chart_dir / "values.yaml")
+        print("  Restored values.yaml")
+
+    for name in ("helmfile.yaml.gotmpl", "helmfile.yaml"):
+        if not (selected / name).is_file():
+            continue
+        if not restore_helmfile:
+            print(f"  Skipped {name} (ArgoCD delivers this component; it is not the deploy path)")
+        else:
+            shutil.copy2(selected / name, chart_dir / name)
+            print(f"  Restored {name}")
+        break
+
+    for entry in sorted(selected.glob("*.yaml")):
+        name = entry.name
+        if name in ("Chart.yaml", "values.yaml", "helmfile.yaml"):
+            continue
+        shutil.copy2(entry, values_dir / name)
+        print(f"  Restored values/{name}")
 
 
 def do_rollback(backup_dir: Path, chart_dir: Path, values_dir: Path) -> None:
@@ -231,32 +303,7 @@ def do_rollback(backup_dir: Path, chart_dir: Path, values_dir: Path) -> None:
     selected = prompt_select_backup(backups)
     print()
     print(f"Restoring from backup/{selected.name}...")
-
-    src = selected / "Chart.yaml"
-    if src.is_file():
-        shutil.copy2(src, chart_dir / "Chart.yaml")
-        print("  Restored Chart.yaml")
-
-    src = selected / "values.yaml"
-    if src.is_file():
-        shutil.copy2(src, chart_dir / "values.yaml")
-        print("  Restored values.yaml")
-
-    helmfile_gotmpl = selected / "helmfile.yaml.gotmpl"
-    helmfile_yaml = selected / "helmfile.yaml"
-    if helmfile_gotmpl.is_file():
-        shutil.copy2(helmfile_gotmpl, chart_dir / "helmfile.yaml.gotmpl")
-        print("  Restored helmfile.yaml.gotmpl")
-    elif helmfile_yaml.is_file():
-        shutil.copy2(helmfile_yaml, chart_dir / "helmfile.yaml")
-        print("  Restored helmfile.yaml")
-
-    for entry in sorted(selected.glob("*.yaml")):
-        name = entry.name
-        if name in ("Chart.yaml", "values.yaml", "helmfile.yaml"):
-            continue
-        shutil.copy2(entry, values_dir / name)
-        print(f"  Restored values/{name}")
+    restore_backup_files(selected, chart_dir, values_dir)
 
     print()
     print("Rollback complete! Run 'helmfile diff' to verify.")

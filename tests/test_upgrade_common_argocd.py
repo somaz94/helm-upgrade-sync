@@ -9,6 +9,7 @@ Stdlib unittest only.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import tempfile
 import unittest
@@ -223,6 +224,28 @@ class UpdateArgocdPinsTests(unittest.TestCase):
 
     def test_empty_list_returns_zero(self) -> None:
         self.assertEqual(ca.update_argocd_pins([], "1.0.0", "1.1.0"), 0)
+
+
+class HasArgocdMarkerTests(unittest.TestCase):
+    def _dir(self, *dirs: str, files: tuple[str, ...] = ()) -> Path:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        for d in dirs:
+            (root / d).mkdir()
+        for f in files:
+            (root / f).write_text("")
+        return root
+
+    def test_any_marker_family_counts(self) -> None:
+        for marker in ("argocd", "argocd-aws", "argocd-local", "argocd-local-aws"):
+            with self.subTest(marker=marker):
+                self.assertTrue(ca.has_argocd_marker(self._dir(marker)))
+
+    def test_a_parked_marker_does_not_count(self) -> None:
+        self.assertFalse(ca.has_argocd_marker(self._dir("_pending", "values")))
+
+    def test_a_file_named_like_a_marker_does_not_count(self) -> None:
+        self.assertFalse(ca.has_argocd_marker(self._dir(files=("argocd.yaml",))))
 
 
 if __name__ == "__main__":

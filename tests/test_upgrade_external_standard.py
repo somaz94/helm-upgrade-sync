@@ -445,6 +445,50 @@ class ParseArgsTests(unittest.TestCase):
         args = es._parse_args(["--dry-run"], "upgrade.py", 5, self.backup, self.chart_dir, self.values_dir)
         self.assertTrue(args["dry_run"])
 
+    def test_rollback_hook_replaces_the_default_rollback(self) -> None:
+        hook = mock.MagicMock()
+        with mock.patch.object(es, "_do_rollback") as default, \
+             self.assertRaises(SystemExit) as cm:
+            es._parse_args(
+                ["--rollback"], "upgrade.py", 5,
+                self.backup, self.chart_dir, self.values_dir, hook,
+            )
+        self.assertEqual(cm.exception.code, 0)
+        hook.assert_called_once_with(
+            backup_dir=self.backup, chart_dir=self.chart_dir, values_dir=self.values_dir
+        )
+        default.assert_not_called()
+
+    def test_rollback_without_hook_uses_the_default(self) -> None:
+        with mock.patch.object(es, "_do_rollback") as default, \
+             self.assertRaises(SystemExit):
+            es._parse_args(
+                ["--rollback"], "upgrade.py", 5,
+                self.backup, self.chart_dir, self.values_dir,
+            )
+        default.assert_called_once_with(self.backup, self.chart_dir, self.values_dir)
+
+    def test_list_backups_hook_replaces_the_default_listing(self) -> None:
+        hook = mock.MagicMock()
+        with mock.patch.object(es, "_list_backups") as default, \
+             self.assertRaises(SystemExit) as cm:
+            es._parse_args(
+                ["--list-backups"], "upgrade.py", 5,
+                self.backup, self.chart_dir, self.values_dir, None, hook,
+            )
+        self.assertEqual(cm.exception.code, 0)
+        hook.assert_called_once_with(backup_dir=self.backup)
+        default.assert_not_called()
+
+    def test_list_backups_without_hook_uses_the_default(self) -> None:
+        with mock.patch.object(es, "_list_backups") as default, \
+             self.assertRaises(SystemExit):
+            es._parse_args(
+                ["--list-backups"], "upgrade.py", 5,
+                self.backup, self.chart_dir, self.values_dir,
+            )
+        default.assert_called_once_with(self.backup)
+
     def test_version_with_value(self) -> None:
         args = es._parse_args(
             ["--version", "1.2.3"], "upgrade.py", 5,

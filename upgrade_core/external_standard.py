@@ -119,13 +119,24 @@ PreApplyHook = Callable[..., int]
 
 # Apply step — version pin rewrite that REPLACES the helmfile pin step and
 # fires regardless of helmfile presence. Used by the ``argocd-pin`` template
-# (Phase 5 / argocd-pin) to write ``chart.version`` into
+# to write ``chart.version`` into
 # ``<component>/argocd/<release>.yaml`` — the migrated components no longer
 # ship a helmfile, so the default ``helmfile_path is not None`` pin path
-# never runs. Receives ``(chart_dir, current_version, latest_version)`` and
-# returns the count of pins/files rewritten. Default ``None`` preserves the
-# helmfile pin path byte-for-byte for every non-migrated component.
+# never runs. Receives ``(chart_dir, current_version, latest_version,
+# backup_target)`` and returns the count of pins/files rewritten. Default
+# ``None`` preserves the helmfile pin path byte-for-byte for every
+# non-migrated component.
 PinWriteHook = Callable[..., int]
+
+# ``--rollback`` — replaces the chart-flavored rollback. Used by the
+# ``argocd-pin`` template, whose version pin lives in files the default
+# rollback never restores. Receives ``(backup_dir, chart_dir, values_dir)``.
+RollbackHook = Callable[..., None]
+
+# ``--list-backups`` — replaces the chart-flavored listing, whose
+# ``(Chart: <version>)`` column reads ``unknown`` for a component that keeps
+# no Chart.yaml mirror. Receives ``(backup_dir)``.
+ListBackupsHook = Callable[..., None]
 
 # Step 1 — current-version probe fallback. Fires ONLY when the local
 # Chart.yaml is absent or carries no ``version:`` field. Used by the
@@ -156,6 +167,8 @@ def run(
     pre_apply_hook: PreApplyHook | None = None,
     pin_write_hook: PinWriteHook | None = None,
     current_version_hook: CurrentVersionHook | None = None,
+    rollback_hook: RollbackHook | None = None,
+    list_backups_hook: ListBackupsHook | None = None,
     skip_missing_chart_mirror: bool = False,
 ) -> int:
     """Entry-point invoked by each consumer ``upgrade.py``.
@@ -182,6 +195,10 @@ def run(
         local Chart.yaml yields no ``version`` (argocd-pin pattern, where the
         ArgoCD metadata file is the version SSOT). ``None`` keeps the
         Chart.yaml-only probe.
+      - ``rollback_hook`` — replaces ``--rollback`` (argocd-pin pattern).
+        ``None`` keeps the chart-flavored rollback.
+      - ``list_backups_hook`` — replaces ``--list-backups`` (argocd-pin
+        pattern). ``None`` keeps the chart-flavored listing.
 
     ``skip_missing_chart_mirror`` (argocd-pin pattern) suppresses the local
     Chart.yaml / values.yaml / values.schema.json mirror write for components
@@ -204,7 +221,10 @@ def run(
     helmfile_path, helmfile_name = _detect_helmfile(chart_dir)
     prog = script.name
 
-    args = _parse_args(argv, prog, keep_backups, backup_dir, chart_dir, values_dir)
+    args = _parse_args(
+        argv, prog, keep_backups, backup_dir, chart_dir, values_dir,
+        rollback_hook, list_backups_hook,
+    )
     if args is None:
         return 0
 
@@ -244,14 +264,28 @@ def _parse_args(
     backup_dir: Path,
     chart_dir: Path,
     values_dir: Path,
+    rollback_hook: RollbackHook | None = None,
+    list_backups_hook: ListBackupsHook | None = None,
 ) -> dict | None:
     """Parse CLI args. Returns dict for the main flow, or None for sub-commands."""
+
+    def rollback() -> None:
+        if rollback_hook is None:
+            _do_rollback(backup_dir, chart_dir, values_dir)
+        else:
+            rollback_hook(
+                backup_dir=backup_dir, chart_dir=chart_dir, values_dir=values_dir
+            )
 
     return _parse_upgrade_argv(
         argv,
         usage=lambda: _usage(prog, keep_backups),
-        list_backups=lambda: _list_backups(backup_dir),
-        rollback=lambda: _do_rollback(backup_dir, chart_dir, values_dir),
+        list_backups=lambda: (
+            _list_backups(backup_dir)
+            if list_backups_hook is None
+            else list_backups_hook(backup_dir=backup_dir)
+        ),
+        rollback=rollback,
         cleanup_backups=lambda: _cleanup_backups(backup_dir, keep_backups),
     )
 
@@ -805,6 +839,7 @@ def _apply_upgrade(
             chart_dir=chart_dir,
             current_version=current_version,
             latest_version=latest_version,
+            backup_target=backup_target,
         )
         # A 0-file rewrite means the pin SSOT was not at ``current_version``,
         # so nothing was bumped and the deploy would be a no-op. Reporting

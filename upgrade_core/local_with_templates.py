@@ -59,7 +59,9 @@ from ._common import (
     read_keep_backups_env,
     sorted_backups as _sorted_backups,
 )
+from ._common_argocd import has_argocd_marker as _has_argocd_marker
 from ._common_helmfile import (
+    align_kept_helmfile_pin as _align_kept_helmfile_pin,
     detect_helmfile as _detect_helmfile,
     diff as _diff,
     extract_top_keys as _extract_top_keys,
@@ -242,6 +244,7 @@ def _do_rollback(
     print()
     print(f"Restoring from backup/{selected.name}...")
 
+    chart_have = _read_yaml_field(chart_dir / "Chart.yaml", "version")
     chart_yaml = selected / "Chart.yaml"
     if chart_yaml.is_file():
         shutil.copy2(chart_yaml, chart_dir / "Chart.yaml")
@@ -252,14 +255,23 @@ def _do_rollback(
         shutil.copy2(values_yaml, chart_dir / "values.yaml")
         print("  Restored values.yaml")
 
-    helmfile_gotmpl = selected / "helmfile.yaml.gotmpl"
-    helmfile_plain = selected / "helmfile.yaml"
-    if helmfile_gotmpl.is_file():
-        shutil.copy2(helmfile_gotmpl, chart_dir / "helmfile.yaml.gotmpl")
-        print("  Restored helmfile.yaml.gotmpl")
-    elif helmfile_plain.is_file():
-        shutil.copy2(helmfile_plain, chart_dir / "helmfile.yaml")
-        print("  Restored helmfile.yaml")
+    argocd_delivered = _has_argocd_marker(chart_dir)
+    for name in ("helmfile.yaml.gotmpl", "helmfile.yaml"):
+        if not (selected / name).is_file():
+            continue
+        if argocd_delivered:
+            # A backed-up helmfile here predates the ArgoCD move; restoring it
+            # would bring back hooks and pins that were removed on purpose.
+            print(f"  Skipped {name} (ArgoCD delivers this component; it is not the deploy path)")
+        else:
+            shutil.copy2(selected / name, chart_dir / name)
+            print(f"  Restored {name}")
+        break
+    if argocd_delivered and chart_yaml.is_file():
+        # The upgrade keeps bumping a retired helmfile's pin, so the rollback moves it back.
+        _align_kept_helmfile_pin(
+            chart_dir, chart_have, _read_yaml_field(chart_yaml, "version")
+        )
 
     backup_templates = selected / "templates"
     if backup_templates.is_dir():
@@ -289,7 +301,13 @@ def _do_rollback(
         print(f"  Restored values/{entry.name}")
 
     print()
-    print("Rollback complete! Run 'helmfile diff' to verify.")
+    if argocd_delivered:
+        print(
+            "Rollback complete! Review `git diff`, then commit and push — ArgoCD "
+            "renders this vendored chart from git."
+        )
+    else:
+        print("Rollback complete! Run 'helmfile diff' to verify.")
 
 
 # -----------------------------------------------

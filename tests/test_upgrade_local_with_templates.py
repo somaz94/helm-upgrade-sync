@@ -489,7 +489,71 @@ class RunIntegrationTests(unittest.TestCase):
 
 
 # =============================================================
-# Consumer config spot-check
+# --rollback never writes a helmfile back into an ArgoCD-delivered component
 # =============================================================
+
+
+class RollbackHelmfileTests(unittest.TestCase):
+    """A rollback never writes a helmfile back into a component ArgoCD delivers."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.chart_dir = self.tmp / "fluent-bit"
+        (self.chart_dir / "values").mkdir(parents=True)
+        (self.chart_dir / "templates").mkdir()
+        (self.chart_dir / "Chart.yaml").write_text("apiVersion: v2\nname: fluent-bit\nversion: 0.58.2\n")
+        backup = self.chart_dir / "backup" / "20260101_000000"
+        (backup / "templates").mkdir(parents=True)
+        (backup / "Chart.yaml").write_text("apiVersion: v2\nname: fluent-bit\nversion: 0.57.9\n")
+        (backup / "helmfile.yaml").write_text("hooks: [old]\n")
+        (backup / "dev.yaml").write_text("old: true\n")
+
+    def _rollback(self) -> str:
+        out = io.StringIO()
+        with mock.patch("builtins.input", return_value=""), redirect_stdout(out):
+            lwt._do_rollback(
+                self.chart_dir / "backup", self.chart_dir,
+                self.chart_dir / "values", self.chart_dir / "templates",
+            )
+        return out.getvalue()
+
+    def test_argocd_delivered_component_gets_no_helmfile(self) -> None:
+        (self.chart_dir / "argocd-local").mkdir()
+        out = self._rollback()
+        self.assertFalse((self.chart_dir / "helmfile.yaml").exists())
+        self.assertIn("Skipped helmfile.yaml", out)
+        self.assertIn("version: 0.57.9", (self.chart_dir / "Chart.yaml").read_text())
+        self.assertIn("ArgoCD renders this vendored chart from git", out)
+
+    def test_a_retired_helmfile_on_disk_is_left_alone(self) -> None:
+        (self.chart_dir / "argocd-local-aws").mkdir()
+        (self.chart_dir / "helmfile.yaml").write_text("# RETIRED\nhooks: []\n")
+        self._rollback()
+        self.assertEqual((self.chart_dir / "helmfile.yaml").read_text(), "# RETIRED\nhooks: []\n")
+
+    def test_a_retired_helmfile_pin_moves_back_with_the_chart(self) -> None:
+        # The upgrade keeps bumping a retired helmfile's pin.
+        (self.chart_dir / "argocd-local-aws").mkdir()
+        (self.chart_dir / "helmfile.yaml").write_text("# RETIRED\nreleases:\n  - version: 0.58.2\n")
+        out = self._rollback()
+        self.assertEqual(
+            (self.chart_dir / "helmfile.yaml").read_text(), "# RETIRED\nreleases:\n  - version: 0.57.9\n"
+        )
+        self.assertIn("Updated helmfile.yaml chart pin 0.58.2 -> 0.57.9", out)
+
+    def test_a_gotmpl_helmfile_wins_over_a_plain_one(self) -> None:
+        backup = self.chart_dir / "backup" / "20260101_000000"
+        (backup / "helmfile.yaml.gotmpl").write_text("gotmpl: true\n")
+        self._rollback()
+        self.assertEqual((self.chart_dir / "helmfile.yaml.gotmpl").read_text(), "gotmpl: true\n")
+        self.assertFalse((self.chart_dir / "helmfile.yaml").exists())
+
+    def test_a_helmfile_delivered_component_still_gets_it_back(self) -> None:
+        out = self._rollback()
+        self.assertEqual((self.chart_dir / "helmfile.yaml").read_text(), "hooks: [old]\n")
+        self.assertIn("Run 'helmfile diff' to verify.", out)
+
+
 if __name__ == "__main__":
     unittest.main()

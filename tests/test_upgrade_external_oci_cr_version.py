@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -405,6 +406,120 @@ class RunListBackupsIntegrationTests(unittest.TestCase):
                     )
             self.assertEqual(ctx.exception.code, 1)
             self.assertIn("chart pin tracking is not configured", buf.getvalue())
+
+
+class RollbackTests(unittest.TestCase):
+    """Rollback of a component ArgoCD delivers: never a helmfile, ArgoCD next steps."""
+
+    CONFIG = {"VALUES_FILE": "values/dev.yaml", "VERSION_KEY": "version",
+              "COMPONENT_LABEL": "elasticsearch"}
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.chart_dir = self.tmp / "elasticsearch"
+        (self.chart_dir / "values").mkdir(parents=True)
+        (self.chart_dir / "values" / "dev.yaml").write_text("version: 9.5.4\n")
+        self.backup_dir = self.chart_dir / "backup"
+        # Never reach a cluster, even with KUBE_CONTEXT set in the environment.
+        patcher = mock.patch.object(ecv, "get_live_cr_version", return_value="")
+        self.live = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _argocd(self) -> None:
+        (self.chart_dir / "argocd").mkdir()
+        (self.chart_dir / "argocd" / "elasticsearch.yaml").write_text(
+            'chart:\n  name: elasticsearch-eck\n  version: "0.3.3"\n'
+        )
+
+    def _rollback(self) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("builtins.input", return_value=""), \
+             redirect_stdout(out), redirect_stderr(err):
+            code = ecv._do_rollback(self.CONFIG, self.chart_dir, self.backup_dir, None)
+        return code, out.getvalue(), err.getvalue()
+
+    def _chart_backup(self) -> None:
+        b = self.backup_dir / "20260101_000000-chart"
+        b.mkdir(parents=True)
+        (b / "helmfile.yaml").write_text("releases:\n  - name: elasticsearch\n    version: 0.1.0\n")
+
+    def _stack_backup(self, version: str) -> None:
+        b = self.backup_dir / "20260101_000000"
+        b.mkdir(parents=True)
+        (b / "dev.yaml").write_text(f"version: {version}\n")
+
+    def test_a_pre_argocd_chart_backup_restores_nothing(self) -> None:
+        self._argocd()
+        self._chart_backup()
+        code, out, err = self._rollback()
+        self.assertEqual(code, 1)
+        self.assertFalse((self.chart_dir / "helmfile.yaml").exists())
+        self.assertIn("Nothing was restored", err)
+        self.assertIn("(chart pin 0.1.0)", err)
+        self.assertIn("argocd/elasticsearch.yaml", err)
+        self.assertIn("(chart, pre-ArgoCD, not restorable: 0.1.0)", out)
+
+    def test_a_marker_dir_without_a_pin_still_gets_a_pointer(self) -> None:
+        (self.chart_dir / "argocd").mkdir()
+        self._chart_backup()
+        _, _, err = self._rollback()
+        self.assertIn("set chart.version in the argocd*/ markers by hand", err)
+
+    def test_a_helmfile_component_still_restores_its_chart_pin(self) -> None:
+        self._chart_backup()
+        code, out, _ = self._rollback()
+        self.assertEqual(code, 0)
+        self.assertIn("version: 0.1.0", (self.chart_dir / "helmfile.yaml").read_text())
+        self.assertIn("Chart pin rollback complete!", out)
+
+    def test_a_stack_backup_restores_the_values_file(self) -> None:
+        self._argocd()
+        self._stack_backup("9.5.4")
+        (self.chart_dir / "values" / "dev.yaml").write_text("version: 9.5.1\n")
+        code, out, _ = self._rollback()
+        self.assertEqual(code, 0)
+        self.assertEqual((self.chart_dir / "values" / "dev.yaml").read_text(), "version: 9.5.4\n")
+        self.assertIn("ArgoCD applies the CR version", out)
+        self.assertNotIn("WARNING", out)
+        self.assertNotIn("helmfile", out)
+
+    def test_a_downgrade_is_restored_with_a_warning(self) -> None:
+        self._argocd()
+        self._stack_backup("9.5.1")
+        code, out, _ = self._rollback()
+        self.assertEqual(code, 0)
+        self.assertEqual((self.chart_dir / "values" / "dev.yaml").read_text(), "version: 9.5.1\n")
+        self.assertIn("version downgrade (9.5.4 -> 9.5.1, current version from the values file)", out)
+        self.assertIn("git restore values/dev.yaml", out)
+        self.assertNotIn("Rollback complete!", out)
+        self.live.assert_called_once_with("elasticsearch", self.chart_dir / "argocd" / "elasticsearch.yaml")
+
+    def test_the_live_cr_decides_when_readable(self) -> None:
+        # A bump whose sync failed: git says 9.5.4, the cluster still runs 9.5.1.
+        self._argocd()
+        self._stack_backup("9.5.1")
+        self.live.return_value = "9.5.1"
+        code, out, _ = self._rollback()
+        self.assertEqual(code, 0)
+        self.assertNotIn("WARNING", out)
+        self.assertIn("Rollback complete!", out)
+
+    def test_a_live_downgrade_names_its_basis(self) -> None:
+        self._argocd()
+        self._stack_backup("9.5.1")
+        (self.chart_dir / "values" / "dev.yaml").write_text("version: 9.5.1\n")
+        self.live.return_value = "9.5.4"
+        _, out, _ = self._rollback()
+        self.assertIn("(9.5.4 -> 9.5.1, current version from the live CR)", out)
+
+    def test_a_helmfile_component_keeps_the_webhook_flow(self) -> None:
+        self._stack_backup("9.5.1")
+        self.live.return_value = "9.5.4"
+        with mock.patch.object(ecv, "handle_downgrade_rollback") as handler:
+            code, _, _ = self._rollback()
+        self.assertEqual(code, 0)
+        handler.assert_called_once()
 
 
 # =============================================================

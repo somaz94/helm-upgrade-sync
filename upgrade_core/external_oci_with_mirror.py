@@ -38,7 +38,9 @@ from .external_oci import (
 )
 from .external_standard import (
     CurrentVersionHook,
+    ListBackupsHook,
     PinWriteHook,
+    RollbackHook,
     run as _run_external_standard,
 )
 
@@ -153,6 +155,8 @@ def run(
     *,
     pin_write_hook: PinWriteHook | None = None,
     current_version_hook: CurrentVersionHook | None = None,
+    rollback_hook: RollbackHook | None = None,
+    list_backups_hook: ListBackupsHook | None = None,
     skip_missing_chart_mirror: bool = False,
 ) -> int:
     """Entry-point invoked by each consumer ``upgrade.py``.
@@ -242,6 +246,8 @@ def run(
         pre_apply_hook=pre_apply,
         pin_write_hook=pin_write_hook,
         current_version_hook=current_version_hook,
+        rollback_hook=rollback_hook,
+        list_backups_hook=list_backups_hook,
         skip_missing_chart_mirror=skip_missing_chart_mirror,
     )
 

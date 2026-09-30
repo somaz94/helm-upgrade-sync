@@ -125,7 +125,7 @@ Rule 3 deliberately outranks rule 4: a copy vendored inside a repository keeps m
 KUBE_CONTEXT="$(kubectl config current-context)" ./upgrade.py --dry-run
 ```
 
-When `KUBE_CONTEXT` is unset, the read-only checks are skipped and each one says so (`REFUSED` / `constraint NOT verified`), and the downgrade rollback — which scales the operator down and deletes its admission webhook — refuses to run and exits 2. The other templates never contact a cluster and do not need it.
+When `KUBE_CONTEXT` is unset, the read-only checks are skipped and each one says so (`REFUSED` / `constraint NOT verified`), and the downgrade rollback — which scales the operator down and deletes its admission webhook — refuses to run and exits 2. An `external-oci-cr-version` component that ArgoCD delivers (it has an `argocd*/` marker dir) never takes that path: its rollback only restores the values file and warns on a downgrade, judged against the live CR when `KUBE_CONTEXT` is set and against the working-tree values file otherwise, and ArgoCD applies the change after the push. The other templates never contact a cluster and do not need it.
 
 <br/>
 

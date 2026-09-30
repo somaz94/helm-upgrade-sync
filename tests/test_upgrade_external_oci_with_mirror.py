@@ -300,13 +300,19 @@ class RunIntegrationTests(unittest.TestCase):
             return 0
 
         sentinel = lambda *, chart_dir: "1.2.3"  # noqa: E731
+        rollback = lambda: None  # noqa: E731
+        list_backups = lambda *, backup_dir: None  # noqa: E731
         with mock.patch.object(ewm, "_run_external_standard", side_effect=fake_runner):
             ewm.run(
                 cfg, [], script_path="/tmp/upgrade.py",
                 current_version_hook=sentinel,
+                rollback_hook=rollback,
+                list_backups_hook=list_backups,
                 skip_missing_chart_mirror=True,
             )
         self.assertIs(called["current_version_hook"], sentinel)
+        self.assertIs(called["rollback_hook"], rollback)
+        self.assertIs(called["list_backups_hook"], list_backups)
         self.assertTrue(called["skip_missing_chart_mirror"])
 
     def test_run_defaults_pin_only_kwargs_off(self) -> None:
@@ -321,6 +327,8 @@ class RunIntegrationTests(unittest.TestCase):
         with mock.patch.object(ewm, "_run_external_standard", side_effect=fake_runner):
             ewm.run(cfg, [], script_path="/tmp/upgrade.py")
         self.assertIsNone(called["current_version_hook"])
+        self.assertIsNone(called["rollback_hook"])
+        self.assertIsNone(called["list_backups_hook"])
         self.assertFalse(called["skip_missing_chart_mirror"])
 
     def test_run_wires_print_values_summary(self) -> None:

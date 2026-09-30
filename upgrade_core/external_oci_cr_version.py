@@ -23,8 +23,11 @@ CR-version flow is structurally different:
     the helmfile pin on apply.
   - **Rollback** — auto-detects whether the selected backup is a Stack
     bump (``<TIMESTAMP>`` dir with values file) or a chart-pin bump
-    (``<TIMESTAMP>-chart`` dir with helmfile). Stack rollback further
-    detects version downgrade (vs live CR) and defers to
+    (``<TIMESTAMP>-chart`` dir with helmfile). For a component ArgoCD
+    delivers, a chart-pin backup predates the move and is refused, and a
+    Stack rollback restores the values file with a downgrade warning (live
+    CR when readable, else the working-tree values file). Otherwise Stack
+    rollback detects a version downgrade (vs live CR) and defers to
     :func:`._common_cr.handle_downgrade_rollback` (auto-webhook flow or
     7-step manual instructions).
 
@@ -76,6 +79,7 @@ from ._common_cr import (
     verify_image_with_fallback,
 )
 from ._common_argocd import (
+    has_argocd_marker,
     read_argocd_chart_url,
     read_argocd_chart_version,
     read_argocd_release_name,
@@ -170,11 +174,14 @@ def _list_backups(
     backup_dir: Path, values_file: str, version_key: str
 ) -> None:
     """Print available backups with type label and tracked version."""
+    argocd_delivered = has_argocd_marker(backup_dir.parent)
 
     def describe(d: Path) -> str:
         kind = _classify_backup(d, values_file)
         ver = _read_backup_version(d, values_file, version_key)
-        if kind == "chart":
+        if kind == "chart" and argocd_delivered:
+            label = "chart, pre-ArgoCD, not restorable"
+        elif kind == "chart":
             label = "chart"
         elif kind == "stack":
             label = version_key
@@ -192,10 +199,7 @@ def _do_rollback(
     backup_dir: Path,
     helmfile_path: Path | None,
 ) -> int:
-    """Branch on backup type and restore accordingly.
-
-    N14: dropped unused ``helmfile_name`` parameter (signature change).
-    """
+    """Branch on backup type and restore accordingly."""
     backups = sorted_backups(backup_dir)
     if not backups:
         print("No backups found.")
@@ -204,6 +208,24 @@ def _do_rollback(
     _list_backups(backup_dir, config["VALUES_FILE"], config["VERSION_KEY"])
     selected = prompt_select_backup(backups)
     kind = _classify_backup(selected, config["VALUES_FILE"])
+    argocd_delivered = has_argocd_marker(chart_dir)
+
+    if kind == "chart" and argocd_delivered:
+        # The ArgoCD-era chart bump writes no backup (git is the record), so every
+        # chart backup predates the move and holds the retired helmfile.
+        pins = ", ".join(
+            f"{f.parent.name}/{f.name}" for f in _detect_argocd_pin_files(chart_dir)
+        ) or "the argocd*/ markers"
+        print()
+        old_pin = _read_backup_version(selected, config["VALUES_FILE"], config["VERSION_KEY"])
+        print(
+            f"  ERROR: backup/{selected.name} (chart pin {old_pin or 'unknown'}) is a "
+            f"helmfile chart pin from before the ArgoCD move; restoring it would bring "
+            f"the retired helmfile back. Nothing was restored — set chart.version in "
+            f"{pins} by hand, or `git revert` the bump commit.",
+            file=sys.stderr,
+        )
+        return 1
 
     if kind == "chart":
         print()
@@ -229,6 +251,8 @@ def _do_rollback(
     backup_ver = _read_backup_version(
         selected, config["VALUES_FILE"], config["VERSION_KEY"]
     )
+    if argocd_delivered:
+        return _restore_stack_for_argocd(config, chart_dir, selected, backup_ver)
     live_ver = get_live_cr_version(config["COMPONENT_LABEL"], helmfile_path)
     is_downgrade = False
     if live_ver and backup_ver and live_ver != backup_ver:
@@ -254,6 +278,59 @@ def _do_rollback(
 
     print()
     print("Rollback complete! Run 'helmfile diff' to verify, then 'helmfile apply'.")
+    return 0
+
+
+def _restore_stack_for_argocd(
+    config: dict, chart_dir: Path, selected: Path, backup_ver: str
+) -> int:
+    """Restore the CR version for a component ArgoCD delivers.
+
+    Nothing is applied until the push. The downgrade check reads the live CR (its
+    namespace comes from the marker) and falls back to the working-tree values
+    file when the cluster cannot be read — a bump whose sync failed is the case
+    where the two differ.
+    """
+    values_file = chart_dir / config["VALUES_FILE"]
+    src = selected / values_file.name
+    if not src.is_file():
+        print(f"  WARN: backup does not contain {values_file.name}; nothing to restore.")
+        return 1
+    live_ver = get_live_cr_version(
+        config["COMPONENT_LABEL"], _detect_argocd_pin_file(chart_dir)
+    )
+    current_ver = live_ver or read_yaml_value(values_file, config["VERSION_KEY"])
+    is_downgrade = bool(current_ver and backup_ver) and (
+        semver_compare(backup_ver, current_ver) == -1
+    )
+
+    print()
+    print(f"Restoring from backup/{selected.name}...")
+    values_file.write_text(src.read_text())
+    print(f"  Restored {config['VALUES_FILE']}")
+
+    print()
+    if is_downgrade:
+        basis = "the live CR" if live_ver else "the values file"
+        print(
+            f"  WARNING: This is a version downgrade ({current_ver} -> {backup_ver}, "
+            f"current version from {basis})."
+        )
+        print(
+            "  The operator's admission webhook rejects CR downgrades, and the "
+            "operator's own ArgoCD App self-heals a webhook deleted by hand, so pause "
+            "its auto-sync first. The Elastic Stack does not downgrade data a newer "
+            "version has written; a snapshot restore may be the real rollback."
+        )
+        print(
+            f"  Nothing is pushed yet: back it out with `git restore "
+            f"{config['VALUES_FILE']}`, or push once that is planned."
+        )
+        return 0
+    print(
+        "Rollback complete! Review `git diff`, then commit and push — ArgoCD applies "
+        "the CR version from the values file."
+    )
     return 0
 
 
