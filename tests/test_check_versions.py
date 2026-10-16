@@ -5,7 +5,8 @@ both the helmfile-tools image's system python3 and any local venv.
 
 Test design:
   - Pure helpers (parse_template_header, matches_only, parse_args) —
-    direct argument-based cases. The orchestrator now defers every
+    direct argument-based cases; helm_available() with an empty PATH or
+    shutil.which / subprocess.run mocked. The orchestrator now defers every
     larger responsibility to sister test modules:
 
       * ``test_upgrade_sync_config_parse.py``  (config_parse.py)
@@ -20,10 +21,14 @@ validation step for byte-for-byte parity against the bash version.
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -112,6 +117,33 @@ class TestArgParsing(unittest.TestCase):
         self.assertEqual(ns.only, [])
         self.assertFalse(ns.no_update)
         self.assertFalse(ns.updates_only)
+
+
+class TestHelmAvailable(unittest.TestCase):
+
+    def test_false_when_helm_not_on_path(self) -> None:
+        # Real lookup against an empty PATH: the old subprocess-only probe raised FileNotFoundError here.
+        with tempfile.TemporaryDirectory() as empty_dir, \
+                mock.patch.dict(os.environ, {"PATH": empty_dir}):
+            self.assertFalse(cv.helm_available())
+
+    def test_does_not_exec_when_which_finds_nothing(self) -> None:
+        with mock.patch.object(cv.shutil, "which", return_value=None), \
+                mock.patch.object(cv.subprocess, "run") as run:
+            self.assertFalse(cv.helm_available())
+        run.assert_not_called()
+
+    def test_true_when_helm_version_succeeds(self) -> None:
+        done = subprocess.CompletedProcess(args=[], returncode=0, stdout="v3.16.0", stderr="")
+        with mock.patch.object(cv.shutil, "which", return_value="/usr/local/bin/helm"), \
+                mock.patch.object(cv.subprocess, "run", return_value=done):
+            self.assertTrue(cv.helm_available())
+
+    def test_false_when_helm_version_fails(self) -> None:
+        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
+        with mock.patch.object(cv.shutil, "which", return_value="/usr/local/bin/helm"), \
+                mock.patch.object(cv.subprocess, "run", return_value=failed):
+            self.assertFalse(cv.helm_available())
 
 
 if __name__ == "__main__":
