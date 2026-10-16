@@ -8,7 +8,7 @@ Human invocations and CI upgrade jobs share one CLI:
                     [--repo-root <dir>]
 
 Supported template types (matched against the `# upgrade-template:` header
-on line 2 of each managed upgrade.sh):
+on line 2 of each managed upgrade.py):
   external-standard         -> helm search repo
   external-with-image-tag   -> helm search repo
   external-oci              -> GitHub Releases API (GITHUB_REPO, honors GITHUB_TAG_PREFIX)
@@ -20,9 +20,8 @@ on line 2 of each managed upgrade.sh):
   argocd-pin                -> helm repo (BASE=standard) or GitHub Releases
                                (BASE=oci); version SSOT in argocd/<release>.yaml
 
-Output: human-readable status table on stdout. Format string widths match the
-bash version verbatim so the awk state machine in `auto-upgrade.py`'s
-`parse_check_versions_phase()` keeps working.
+Output: human-readable status table on stdout. Column widths are fixed so
+`auto-upgrade.py`'s `parse_check_versions_phase()` keeps parsing it.
 
 Exit codes:
   0 — all scans succeeded (regardless of whether upgrades were found).
@@ -77,7 +76,7 @@ from upgrade_sync.yaml_helpers import (  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Phase 1 — parse every managed upgrade.sh into rows.
+# Phase 1 — parse every managed upgrade.py into rows.
 # ---------------------------------------------------------------------------
 
 
@@ -90,7 +89,7 @@ def matches_only(rel: str, only_patterns: list[str]) -> bool:
 def parse_managed_files(
     repo_root: Path, only_patterns: list[str],
 ) -> tuple[list[Row], list[ChartRow], list[str], int, int, int]:
-    """Walk every managed upgrade.sh and emit (rows, chart_rows, helm_repos,
+    """Walk every managed upgrade.py and emit (rows, chart_rows, helm_repos,
     total, skipped, filtered).
 
     `skipped` counts files without an `# upgrade-template:` header.

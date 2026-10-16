@@ -1,8 +1,7 @@
 """Unit tests for upgrade_core/_common_helmfile.py.
 
-Covers the 11 helmfile-flavored helpers extracted in the shell -> python migration
-The sibling modules now import these via alias, and ``external-oci``
-relies on the extraction to keep its hook overrides thin.
+Covers the 11 helmfile-flavored helpers shared by external_standard,
+external_with_image_tag and external_oci.
 
 Stdlib unittest only.
 """

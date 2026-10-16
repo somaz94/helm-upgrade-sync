@@ -1,6 +1,6 @@
 """Unit tests for upgrade_core/_common.py.
 
-Covers the 4 helpers extracted into :mod:`upgrade_core._common`:
+Covers the 4 shared helpers:
 sorted_backups, cleanup_backups, auto_prune_backups, is_excluded.
 
 Stdlib unittest only — keeps dep surface at zero.
